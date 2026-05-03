@@ -1,0 +1,22 @@
+[
+  {
+    "event": "open",
+    "email": "test+open@cbfcalcio5.com",
+    "timestamp": 1764700000,
+    "subject": "TEST — please ignore",
+    "useragent": "Mozilla/5.0 Test",
+    "ip": "127.0.0.1",
+    "sg_event_id": "test-event-id-001",
+    "sg_message_id": "test-message-id-001"
+  },
+  {
+    "event": "click",
+    "email": "test+click@cbfcalcio5.com",
+    "timestamp": 1764700060,
+    "subject": "TEST — please ignore",
+    "url": "https://johnsonbuys.com/sell",
+    "useragent": "Mozilla/5.0 Test",
+    "ip": "127.0.0.1",
+    "sg_event_id": "test-event-id-002"
+  }
+]

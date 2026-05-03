@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.cheaphomes.dealmatcher</string>
+
+    <!-- Files live in ~/dealmatcher/ (NOT ~/Desktop) so macOS Full Disk
+         Access is NOT required. Only Desktop/Documents/Downloads need
+         FDA for launchd jobs; a plain home-directory subfolder can be
+         read/written freely. -->
+    <!-- Uses python.org's Python 3.14 (Chris's default, matches
+         `which python3`). Install deps once with
+         `pip3 install ‑‑break-system-packages -r requirements_cheaphomes.txt`
+         (note: that's the standard pip flag spelled with non-hyphen
+         dashes here only because XML comments cannot contain a literal
+         double-hyphen. Use the real flag when typing the command).
+         Deps land in this Python's site-packages, importable at runtime. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Library/Frameworks/Python.framework/Versions/3.14/bin/python3</string>
+        <string>/Users/christopherjohnson/dealmatcher/cheaphomesfla_scraper.py</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/christopherjohnson/dealmatcher</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:/Library/Developer/CommandLineTools/usr/bin</string>
+    </dict>
+
+    <!-- 3x daily per sprint Day 2 spec:
+           10 AM — early morning blast catch (most wholesalers send 7-9 AM)
+           2 PM  — midday additions
+           6 PM  — afternoon / late-day blast catch
+         Matcher looks back 26 hours + Salesforce-Task de-dupe ensures
+         no deal is missed and no buyer is double-notified between runs. -->
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict>
+            <key>Hour</key>
+            <integer>10</integer>
+            <key>Minute</key>
+            <integer>0</integer>
+        </dict>
+        <dict>
+            <key>Hour</key>
+            <integer>14</integer>
+            <key>Minute</key>
+            <integer>0</integer>
+        </dict>
+        <dict>
+            <key>Hour</key>
+            <integer>18</integer>
+            <key>Minute</key>
+            <integer>0</integer>
+        </dict>
+    </array>
+
+    <key>StartOnMount</key>
+    <false/>
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/christopherjohnson/dealmatcher/logs/scraper_stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/christopherjohnson/dealmatcher/logs/scraper_stderr.log</string>
+</dict>
+</plist>

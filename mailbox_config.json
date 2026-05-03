@@ -1,0 +1,46 @@
+{
+  "_comment": "Cheap Homes FLA / Johnson Buys mailbox configuration. One entry per source inbox. Set 'enabled': false to skip without deleting. Any key beginning with '_' is a comment and ignored by the loader. The matcher reads EVERY enabled mailbox, filters by the 21-sender allowlist at /Users/christopherjohnson/Desktop/cheaphomesfla_senders.txt, and dedupes matches per buyer via Salesforce Tasks so the same deal never sends twice even if it arrives in multiple inboxes.",
+  "mailboxes": [
+    {
+      "_label": "Chris's personal Gmail (chrisjohnsonmiami) — primary intake, confirmed 'many' wholesaler blasts during 2026-04-21 discovery",
+      "type": "gmail",
+      "enabled": true,
+      "username": "chrisjohnsonmiami@gmail.com",
+      "password_env": "GMAIL_CJM_APP_PASSWORD",
+      "host": "imap.gmail.com",
+      "port": 993,
+      "folder": "INBOX"
+    },
+    {
+      "_label": "Chris's other personal Gmail (cbfcalcio5) — confirmed by user 2026-04-21 as also receiving wholesaler emails",
+      "type": "gmail",
+      "enabled": true,
+      "username": "cbfcalcio5@gmail.com",
+      "password_env": "GMAIL_CBF_APP_PASSWORD",
+      "host": "imap.gmail.com",
+      "port": 993,
+      "folder": "INBOX"
+    },
+    {
+      "_label": "Business Gmail (info@johnsonbuys.com) — confirmed by user 2026-04-21 as also receiving wholesaler emails",
+      "type": "gmail",
+      "enabled": true,
+      "username": "info@johnsonbuys.com",
+      "password_env": "GMAIL_JB_APP_PASSWORD",
+      "host": "imap.gmail.com",
+      "port": 993,
+      "folder": "INBOX"
+    },
+    {
+      "_label": "info@cheaphomesFLA.com via Microsoft Graph — reserved for future forwarded intake / sending identity for buyer alerts. Populate tenant/app creds in .env before flipping enabled to true.",
+      "type": "graph",
+      "enabled": false,
+      "user": "info@cheaphomesFLA.com",
+      "tenant_env": "GRAPH_CHF_TENANT_ID",
+      "client_env": "GRAPH_CHF_CLIENT_ID",
+      "secret_env": "GRAPH_CHF_CLIENT_SECRET",
+      "folder": "Inbox",
+      "top": 200
+    }
+  ]
+}

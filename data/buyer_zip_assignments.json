@@ -1,0 +1,22 @@
+{
+  "_README": "Suggested zip assignments for the 3 real CHF buyers who have no zips set. Edit any list to taste. Empty lists are skipped. Then: python3 tools/backfill_buyer_zips.py --dry-run (preview) → python3 tools/backfill_buyer_zips.py (apply). Selections were curated based on each buyer's stated counties, budget tier, and strategy.",
+
+  "_NOTE_jose_ortega":      "Already has 19 zips set (Charlotte/Collier/Lee SW FL). Listed for completeness — backfill is idempotent.",
+  "003Nt00000sCiFtIAK":     ["33905", "33928", "33947", "33948", "33950", "33952", "33953", "33954", "33955", "33967", "33980", "33981", "33982", "33983", "34134", "34135", "34138", "34139", "34140"],
+
+  "_NOTE_edward_sellos":    "Already has 4 zips (Miami-Dade core). Adding a few more high-volume B&H zips since his BRRRR strategy + $500k-$1M budget supports a wider net.",
+  "003Nt00000rrKwtIAE":     ["33142", "33147", "33125", "33127", "33135", "33150", "33161", "33162", "33168"],
+
+  "_NOTE_jorge_garcia":     "Central FL: Brevard/Orange/Osceola/Seminole/Volusia. $250k-$500k Fix & Flip — biased to working-class neighborhoods with high turnover.",
+  "003Nt00000sLRJ6IAO":     ["32805", "32808", "32811", "32818", "32822", "32839", "34741", "34744", "34758", "34772", "32707", "32750", "32773", "32114", "32117", "32119", "32168", "32720", "32901", "32904", "32935", "32955", "32780"],
+
+  "_NOTE_axel_neree":       "Coconut Grove ONLY per Chris (2026-04-30). Single zip 33133. Volume will be ~1 deal/month at his $1M+ tier; he prefers signal over noise.",
+  "003Nt00000s6lOZIAY":     ["33133"],
+
+  "_NOTE_abe_saldivar":     "HOLD — Chris is asking Abe whether he wants this broad working-class net (Hollywood/Lauderdale Lakes/Hialeah/Liberty City/Opa-Locka) or specific zips. Empty list = backfill skips him this run. Re-fill once Abe replies.",
+  "003Nt00000s5MCSIA2":     [],
+
+  "_JUNK_records_to_delete": "These two Contacts have no email/phone/counties — likely test submissions. Either DELETE them in Salesforce or set Status='Inactive'/'Junk'. They're filtered out below by leaving the value empty.",
+  "003Nt00000sLxahIAC":     [],
+  "003Nt00000sLAlGIAW":     []
+}

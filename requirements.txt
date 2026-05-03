@@ -1,0 +1,21 @@
+# Cloud + local-dev dependencies for the entire dealmatcher repo.
+# Pinned versions known to work on Python 3.10+ (Railway uses 3.11 by default).
+#
+# Install locally:    pip install -r requirements.txt
+# On Railway:         auto-detected during deploy (no action needed)
+
+simple_salesforce==1.12.6
+twilio==9.3.7
+sendgrid==6.11.0
+python-dotenv==1.0.1
+msal==1.31.0
+requests==2.32.3
+beautifulsoup4==4.12.3
+lxml==5.3.0
+
+# Used by tools/build_master_plan_pdf.py + future PDF generation
+reportlab==4.2.5
+
+# Used by tools/sell_score.py + tools/top_buyers_by_zip.py
+pandas==2.2.3
+numpy==2.0.2

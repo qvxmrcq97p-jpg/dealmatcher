@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+# pre-commit — secret-scanning safety net.
+# Runs before every `git commit` to refuse anything that looks like a secret.
+#
+# Install once:
+#     bash tools/git-hooks/install.sh
+#
+# What it blocks (refuses commit if any are present in staged changes):
+#   - .env file contents being committed
+#   - SF_PASSWORD = "literal_value"   (anywhere)
+#   - SENDGRID_API_KEY hardcoded (SG.xxx pattern)
+#   - Twilio Auth Tokens hardcoded (32-char hex)
+#   - Salesforce security tokens hardcoded
+#   - GitHub PATs (ghp_/ghu_)
+#   - Cloudflare API tokens (CF-prefixed)
+#
+# Override (rare — proceed despite warning):
+#     git commit --no-verify
+
+set -euo pipefail
+
+red()   { printf "\033[0;31m%s\033[0m\n" "$*"; }
+yellow(){ printf "\033[0;33m%s\033[0m\n" "$*"; }
+green() { printf "\033[0;32m%s\033[0m\n" "$*"; }
+
+# Get just the staged changes (added or modified)
+staged=$(git diff --cached --name-only --diff-filter=ACM 2>/dev/null || true)
+if [ -z "$staged" ]; then
+    exit 0
+fi
+
+violations=0
+
+# ── 1. Forbid committing .env* files entirely (except .env.example) ──
+while IFS= read -r f; do
+    if [[ "$f" =~ ^\.env(\..+)?$ ]] && [[ "$f" != ".env.example" ]]; then
+        red   "✗ BLOCKED: '$f' looks like an env file with real secrets."
+        echo  "   Add it to .gitignore and run: git rm --cached '$f'"
+        violations=$((violations+1))
+    fi
+done <<< "$staged"
+
+# ── 2. Scan staged content for hardcoded secret patterns ──
+patterns=(
+    'SF_PASSWORD\s*=\s*"[^"$]+"'           # SF password as string literal
+    'SF_SECURITY_TOKEN\s*=\s*"[^"$]+"'     # SF security token literal
+    'SENDGRID_API_KEY\s*=\s*"SG\.[^"]+"'   # SendGrid API key
+    'TWILIO_AUTH_TOKEN\s*=\s*"[a-fA-F0-9]{32}"'  # Twilio auth token (32-hex)
+    'TWILIO_ACCOUNT_SID\s*=\s*"AC[a-fA-F0-9]{32}"'  # Twilio SID
+    'ghp_[A-Za-z0-9]{36,}'                 # GitHub Personal Access Token
+    'ghu_[A-Za-z0-9]{36,}'                 # GitHub User-to-Server token
+    'CF[A-Z_]+TOKEN\s*=\s*"[A-Za-z0-9_-]{40,}"'  # Cloudflare API token
+    'AKIA[0-9A-Z]{16}'                     # AWS Access Key ID
+    'sk_live_[0-9a-zA-Z]{24,}'             # Stripe live secret
+)
+
+# Build a single egrep pattern joined by |
+pattern_combined=$(IFS='|'; echo "${patterns[*]}")
+
+# Get the actual staged diff (added lines only)
+diff_added=$(git diff --cached --diff-filter=ACM | grep -E "^\+[^+]" || true)
+
+if [ -n "$diff_added" ]; then
+    matches=$(echo "$diff_added" | grep -E "$pattern_combined" || true)
+    if [ -n "$matches" ]; then
+        red "✗ BLOCKED: hardcoded secrets detected in staged changes:"
+        echo
+        echo "$matches" | head -10 | sed 's/^/   /'
+        echo
+        yellow "How to fix:"
+        echo  "   1. Replace the hardcoded value with: os.environ['VAR_NAME']"
+        echo  "   2. Add VAR_NAME to .env.cheaphomesfla (locally only, never committed)"
+        echo  "   3. Add VAR_NAME to Railway Shared Variables for production"
+        echo  "   4. git add the fixed file → commit again"
+        violations=$((violations+1))
+    fi
+fi
+
+# ── 3. Anti-footgun: warn if .env.cheaphomesfla shows up tracked ──
+if git ls-files --error-unmatch ".env.cheaphomesfla" >/dev/null 2>&1; then
+    red   "✗ BLOCKED: .env.cheaphomesfla is tracked by git. It must be gitignored."
+    echo  "   Run: git rm --cached .env.cheaphomesfla && echo '.env.cheaphomesfla' >> .gitignore"
+    violations=$((violations+1))
+fi
+
+if [ "$violations" -gt 0 ]; then
+    echo
+    red "Commit refused — $violations issue(s) above. Fix and try again."
+    yellow "(To bypass for an emergency: git commit --no-verify — but please don't)"
+    exit 1
+fi
+
+green "✓ pre-commit: no secrets detected in staged changes"
+exit 0

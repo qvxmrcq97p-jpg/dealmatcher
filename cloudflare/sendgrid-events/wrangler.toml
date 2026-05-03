@@ -1,0 +1,11 @@
+name = "sendgrid-events"
+main = "sendgrid_events_worker.js"
+compatibility_date = "2024-10-01"
+
+# KV namespace for /health endpoint last_event_at timestamp.
+# Create once with:
+#   wrangler kv namespace create LAST_EVENT_AT
+# Then paste the returned id below and re-deploy.
+[[kv_namespaces]]
+binding = "LAST_EVENT_AT"
+id      = "PASTE_KV_ID_HERE"

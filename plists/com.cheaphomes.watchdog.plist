@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.cheaphomes.watchdog</string>
+
+    <!-- Daily 9 AM watchdog. Catches campaign failures within 24 hours
+         instead of multi-day silent breakage. Uses python.org Python 3.14
+         (has Full Disk Access on Desktop). -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Library/Frameworks/Python.framework/Versions/3.14/bin/python3</string>
+        <string>/Users/christopherjohnson/dealmatcher/tools/system_watchdog.py</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/christopherjohnson/dealmatcher</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:/Library/Developer/CommandLineTools/usr/bin</string>
+    </dict>
+
+    <!-- 9:00 AM — runs after the 8:00 AM email + 8:15 AM SMS scheduled
+         campaigns, so it sees today's run results. Sends Chris an email
+         only if anything's wrong. Silent on green days. -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>9</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <key>StartOnMount</key>
+    <false/>
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/christopherjohnson/dealmatcher/logs/watchdog_stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/christopherjohnson/dealmatcher/logs/watchdog_stderr.log</string>
+</dict>
+</plist>

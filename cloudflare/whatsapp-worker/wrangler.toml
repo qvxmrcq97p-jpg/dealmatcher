@@ -1,0 +1,11 @@
+name = "cheaphomesfla-whatsapp-webhook"
+main = "whatsapp_webhook_worker.js"
+compatibility_date = "2024-10-01"
+
+# KV namespace stores the timestamp of the last successful WA forward.
+# Create once with:
+#   wrangler kv namespace create LAST_MSG_AT
+# Then paste the returned id below and re-deploy.
+[[kv_namespaces]]
+binding = "LAST_MSG_AT"
+id      = "PASTE_KV_ID_HERE"

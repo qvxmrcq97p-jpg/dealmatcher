@@ -1,0 +1,49 @@
+# ── Secrets ──────────────────────────────────────────────────────────
+# These NEVER go in git. Real values live in Railway env vars.
+# Local dev uses .env.cheaphomesfla on whichever Mac you're working on.
+.env
+.env.*
+!.env.example
+
+# ── Local-only state + logs ─────────────────────────────────────────
+# State files mean different things on different machines and get
+# regenerated on each run. Cloud uses Railway's persistent volume.
+state/
+logs/
+data/buyer_audit_*.json
+data/buyer_audit_*.txt
+data/sell_score_*.csv
+data/top_buyers_outreach_candidates.csv
+data/below_market_seed.csv
+data/fb_*.csv
+
+# ── Python ──────────────────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.venv/
+venv/
+
+# ── macOS ───────────────────────────────────────────────────────────
+.DS_Store
+~$*
+
+# ── Generated docs / one-off PDFs ───────────────────────────────────
+docs/master_plan.pdf
+
+# ── Mac-only cred file (left untouched at /Users/.../.env.cheaphomesfla) ──
+.env.cheaphomesfla
+
+# ── Working / sample data ───────────────────────────────────────────
+*.xlsx
+sample_data/v1_vs_v2_*
+
+# ── Twilio Functions runtime artifacts ─────────────────────────────
+twilio-functions/node_modules/
+
+# Cloudflare wrangler local cache
+.wrangler/
+
+# Investor data with real email addresses
+data/*.csv

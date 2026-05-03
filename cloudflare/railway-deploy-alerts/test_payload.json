@@ -1,0 +1,12 @@
+{
+  "type": "DEPLOY",
+  "status": "FAILED",
+  "project": { "name": "dealmatcher" },
+  "service": { "name": "scraper-test" },
+  "deployment": {
+    "id": "test-deploy-id-001",
+    "url": "https://railway.app/project/test/service/scraper-test",
+    "createdAt": "2026-05-02T18:30:00.000Z"
+  },
+  "environment": { "name": "production" }
+}

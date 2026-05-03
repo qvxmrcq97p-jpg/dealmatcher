@@ -1,0 +1,27 @@
+# Cheap Homes FLA — Approved Wholesaler Senders
+# Forwarded to info@cheaphomesFLA.com; used as the allowlist + source-attribution table.
+# Format: display_name | from_address
+# Sources flagged (CC) use Constant Contact envelope (ccsend.com) — address may rotate; match on display name as backup.
+# Sources flagged (MC) use Mailchimp envelope (mailchimpapp.com) — same caveat.
+
+Jonathan Espinosa (JE Financial Holdings) | info-jefinancialholdings.com@shared1.ccsend.com    # (CC)
+BuyersPro | sales@buyerspro.com
+Home Venture Investments, LLC | manny@HomeVentureInvestments.com
+Quicksilver Real Estate Group | walter@walterdevenne.ccsend.com                               # (CC)
+AC Synergy Investment, LLC | dispositionsynergy-gmail.com@shared1.ccsend.com                   # (CC)
+Only Direct | Michael (JVD Properties) | jim-jvdproperties.com@shared1.ccsend.com              # (CC)
+Patton Investment Properties | info@pattoninvestmentproperties.com
+All Town Investments | Alltowninvestmentsllc@118689630.mailchimpapp.com                        # (MC)
+VILA ENTERPRISES LLC | vila-vilaenterprisesllc.com@shared1.ccsend.com                          # (CC)
+All About Real Estate | DEALS@allaboutrealestate.com
+JG Equity Sales | mgonzalez@jgequity.com
+Sway Franco (Sway Capital Inc) | swaycapitalinc@gmail.com
+AO Investments | deals@aoinvestments.ccsend.com                                                # (CC)
+Scott Markowitz (Rent2Own Guys LLC) | scottrent2ownguysllc@7954309.mailchimpapp.com            # (MC)
+Andres — Blue Properties Inc. | andres@bluepropertiesre.ccsend.com                             # (CC)
+Shark Investor Properties | aliel@sharkinvestorproperties.com
+HomeSellers Real Estate Group (Ernie the Title Guy) | erniethetitleguy-gmail.com@shared1.ccsend.com  # (CC)
+Richard Vidot — Oasis Property Investments Inc. | richard@oasispropertyinvestments.ccsend.com  # (CC)
+Highlands Investment Group, LLC (Aisha) | aisha@highlandsinvestment.ccsend.com                 # (CC)
+South Florida Wholesale Homes (Todd) | todd@southfloridawholesalehomes.ccsend.com              # (CC)
+Aleksandr Stupnitskiy (Alex Deals) | wholesale@alexdeals.net

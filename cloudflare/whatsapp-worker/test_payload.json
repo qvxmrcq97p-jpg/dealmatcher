@@ -1,0 +1,21 @@
+{
+  "typeWebhook": "incomingMessageReceived",
+  "instanceData": {
+    "idInstance": 1101000000,
+    "wid": "13055551234@c.us"
+  },
+  "timestamp": 1764700000,
+  "idMessage": "test-msg-id-001",
+  "senderData": {
+    "chatId": "13055559999@c.us",
+    "sender": "13055559999@c.us",
+    "senderName": "TEST WHOLESALER",
+    "chatName": "CHF Deals Test"
+  },
+  "messageData": {
+    "typeMessage": "textMessage",
+    "textMessageData": {
+      "textMessage": "TEST DEAL: 1410 NE 161st St, North Miami Beach FL 33162. ARV 425k. Asking 285k. Cash close. Call Ari 305-555-0001."
+    }
+  }
+}

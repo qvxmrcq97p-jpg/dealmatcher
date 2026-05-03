@@ -1,0 +1,73 @@
+name: Deploy Cloudflare Workers
+
+# On push to main: detect which workers changed under cloudflare/ and
+# run `wrangler deploy` in each. Avoids full-deploy spam — only changed
+# workers get pushed. Each worker has its own wrangler.toml + secrets.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "cloudflare/**"
+      - ".github/workflows/deploy-cloudflare.yml"
+  workflow_dispatch:    # manual trigger from GitHub UI
+
+jobs:
+  detect-changed-workers:
+    runs-on: ubuntu-latest
+    outputs:
+      workers: ${{ steps.detect.outputs.workers }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2    # need previous commit to diff against
+
+      - id: detect
+        name: Find changed worker directories
+        run: |
+          # On manual trigger or first commit, deploy all workers.
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] || \
+             ! git rev-parse HEAD~1 > /dev/null 2>&1; then
+            workers=$(ls -d cloudflare/*/ | sed 's|/$||' | jq -R -s -c 'split("\n")[:-1]')
+          else
+            # Diff against previous commit, take cloudflare/* changes
+            workers=$(git diff --name-only HEAD~1 HEAD \
+              | grep '^cloudflare/' \
+              | awk -F/ '{print "cloudflare/"$2}' \
+              | sort -u \
+              | jq -R -s -c 'split("\n")[:-1]')
+          fi
+          echo "workers=$workers" >> $GITHUB_OUTPUT
+          echo "Will deploy: $workers"
+
+  deploy:
+    needs: detect-changed-workers
+    if: needs.detect-changed-workers.outputs.workers != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false       # one bad worker doesn't stop the others
+      matrix:
+        worker: ${{ fromJson(needs.detect-changed-workers.outputs.workers) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install wrangler
+        run: npm install -g wrangler
+
+      - name: Deploy ${{ matrix.worker }}
+        working-directory: ${{ matrix.worker }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          # Skip if no wrangler.toml (defensive — non-worker dirs shouldn't be in cloudflare/)
+          if [ ! -f wrangler.toml ]; then
+            echo "No wrangler.toml in ${{ matrix.worker }} — skipping"
+            exit 0
+          fi
+          wrangler deploy

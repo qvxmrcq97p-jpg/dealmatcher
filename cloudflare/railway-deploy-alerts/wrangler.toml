@@ -1,0 +1,11 @@
+name = "railway-deploy-alerts"
+main = "railway_deploy_alerts.js"
+compatibility_date = "2024-10-01"
+
+# KV namespace for /health endpoint (last_alert_at).
+# Create once with:
+#   wrangler kv namespace create LAST_ALERT_AT
+# Paste the returned id below and re-deploy.
+[[kv_namespaces]]
+binding = "LAST_ALERT_AT"
+id      = "PASTE_KV_ID_HERE"

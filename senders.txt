@@ -1,0 +1,32 @@
+# CheapHomesFLA Wholesaler Sender List
+# Last updated: April 23, 2026 (from Chris)
+# Format: Display Name <email@domain>
+# These are the senders whose emails should be parsed for deals and matched
+# against buyer criteria in Salesforce.
+
+Aleksandr Stupnitskiy <wholesale@alexdeals.net>
+Shark Investment Properties <aliel@sharkinvestmentproperties.com>
+Scott Markowitz <scottrent2ownguysllc@7954309.mailchimpapp.com>
+HomeSellers Real Estate Group <erniethetitleguy-gmail.com@shared1.ccsend.com>
+AO Investments <deals@aoinvestments.ccsend.com>
+Quick Turn Properties a Division Stellar Holdings, LLC <m.mcgrane@stellarholdingsllc.ccsend.com>
+Ava Bolen <southfloridadispo@joehomebuyer.com>
+Cash FLow Properties <camilo@cashflowproperties.ccsend.com>
+Patton Investment Properties <info@pattoninvestmentproperties.com>
+South Florida Wholesale Homes <todd@southfloridawholesalehomes.ccsend.com>
+Jonathan Espinosa <info-jefinancialholdings.com@shared1.ccsend.com>
+Andres - Blue Properties Inc. <andres@bluepropertiesre.ccsend.com>
+Richard Vidot Oasis Property Investments Inc. <richard@oasispropertyinvestments.ccsend.com>
+Sellwholesalehouses.com <dispo@sellwholesalehouses.com>
+Home Venture Investments, LLC <manny@HomeVentureInvestments.com>
+Jodi Henley <JodiH@IbuyHomesinFL.com>
+AC Synergy Investment,LLC <dispositionsynergy-gmail.com@shared1.ccsend.com>
+Highlands Investment Group, LLC <aisha@highlandsinvestment.ccsend.com>
+All Town Investments <Alltowninvestmentsllc@118689630.mailchimpapp.com>
+DEALS@allaboutrealestate.com <DEALS@allaboutrealestate.com>
+Moonvestor® +1-321-626-9890 <president@moonvestor.com>
+JG Equity Sales <mgonzalez@jgequity.com>
+Only Direct | Michael <jim-jvdproperties.com@shared1.ccsend.com>
+Your Trusted Buyer (Rami) <rami@yourtrustedbuyer.com>
+Shark Investment Properties (alt domain) <aliel@sharkinvestorproperties.com>
+WhatsApp Deal Forwarder <whatsapp-deals@cheaphomesfla.com>

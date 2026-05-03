@@ -1,0 +1,12 @@
+name = "motivatedsellers-ppl-worker"
+main = "motivatedsellers_ppl_worker.js"
+compatibility_date = "2024-10-01"
+
+# KV namespace stores the timestamp of the last successful lead. /health
+# reads it; cloud_health_check.py uses it to detect a silent stoppage.
+# Create once with:
+#   wrangler kv namespace create LAST_LEAD_AT
+# Then paste the returned id below and re-deploy.
+[[kv_namespaces]]
+binding = "LAST_LEAD_AT"
+id      = "PASTE_KV_ID_HERE"
