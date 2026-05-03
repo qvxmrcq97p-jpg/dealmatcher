@@ -84,15 +84,76 @@ def find_service(env):
 
 
 def find_function(env, service_sid):
-    """Find the /sms function SID."""
+    """Find the /sms function SID by matching deployed path on the active build."""
     print(f"→ Looking up Function '{FUNCTION_PATH}'...")
-    r = twilio_request("GET", f"https://serverless.twilio.com/v1/Services/{service_sid}/Functions?PageSize=100", env)
-    for fn in r.get("functions", []):
-        if fn.get("friendly_name") == "sms" or fn.get("friendly_name") == FUNCTION_PATH.lstrip("/"):
-            print(f"  ✓ Found: {fn['sid']}")
-            return fn["sid"]
-    raise SystemExit(f"  ✗ Function '{FUNCTION_PATH}' not found. Existing functions:\n  " +
-                     "\n  ".join(f"{f.get('friendly_name')} ({f['sid']})" for f in r.get("functions", [])))
+
+    # Functions API returns metadata only — friendly_name often = "Untitled_N".
+    # The actual path lives on each function's Versions. Cross-reference each
+    # function's most recent version to its path.
+    funcs = twilio_request(
+        "GET",
+        f"https://serverless.twilio.com/v1/Services/{service_sid}/Functions?PageSize=100",
+        env,
+    ).get("functions", [])
+
+    matches = []
+    for fn in funcs:
+        # Get the most recent version's path
+        vers = twilio_request(
+            "GET",
+            f"https://serverless.twilio.com/v1/Services/{service_sid}/Functions/{fn['sid']}/Versions?PageSize=1",
+            env,
+        ).get("versions", [])
+        if vers:
+            path = vers[0].get("path", "")
+            if path == FUNCTION_PATH or path == FUNCTION_PATH.lstrip("/"):
+                matches.append((fn, path))
+
+    if len(matches) == 1:
+        fn, path = matches[0]
+        print(f"  ✓ Found '{path}' → {fn['sid']} (friendly_name: {fn.get('friendly_name')})")
+        return fn["sid"]
+
+    if len(matches) > 1:
+        print(f"  ! Multiple functions map to {FUNCTION_PATH}:")
+        for fn, path in matches:
+            print(f"    - {fn['sid']} ({fn.get('friendly_name')})")
+        # Pick the most recently updated
+        matches.sort(key=lambda m: m[0].get("date_updated", ""), reverse=True)
+        fn = matches[0][0]
+        print(f"  → Using most recently updated: {fn['sid']}")
+        return fn["sid"]
+
+    # No match in Functions/Versions — check the active build's function_versions
+    # (deployed paths can differ from per-function latest versions if a build
+    # pinned an older version of a function).
+    print(f"  · No match via per-function Versions. Checking active deployment...")
+
+    envs = twilio_request(
+        "GET", f"https://serverless.twilio.com/v1/Services/{service_sid}/Environments", env
+    ).get("environments", [])
+    if envs and envs[0].get("build_sid"):
+        build_sid = envs[0]["build_sid"]
+        build = twilio_request(
+            "GET", f"https://serverless.twilio.com/v1/Services/{service_sid}/Builds/{build_sid}", env
+        )
+        fvs = build.get("function_versions", [])
+        print(f"  · Active build {build_sid} has {len(fvs)} function version(s):")
+        for fv in fvs:
+            print(f"      - function_sid={fv.get('function_sid')}  path={fv.get('path')}  visibility={fv.get('visibility')}")
+            if fv.get("path") == FUNCTION_PATH:
+                print(f"  ✓ Match: {fv.get('function_sid')}")
+                return fv["function_sid"]
+
+    # Last resort — list everything for debugging
+    print(f"  ✗ No function has path '{FUNCTION_PATH}' anywhere.")
+    print(f"  Functions exist but all are empty placeholders. Likely the SMS")
+    print(f"  webhook is wired to a Studio Flow or a different service.")
+    print(f"")
+    print(f"  Check in Twilio Console:")
+    print(f"    Phone Numbers → Manage → +1 (954) 953-4554 → Messaging section")
+    print(f"  See where 'A MESSAGE COMES IN' actually points.")
+    raise SystemExit(f"  Aborting.")
 
 
 def get_environment(env, service_sid):
@@ -108,11 +169,12 @@ def get_environment(env, service_sid):
 
 
 def upload_version(env, service_sid, function_sid, code):
-    """Upload new function version."""
+    """Upload new function version. Uses the dedicated serverless-upload subdomain."""
     print("→ Uploading new function version...")
-    url = f"https://serverless.twilio.com/v1/Services/{service_sid}/Functions/{function_sid}/Versions"
+    # Code uploads go to serverless-upload.twilio.com, not serverless.twilio.com
+    url = f"https://serverless-upload.twilio.com/v1/Services/{service_sid}/Functions/{function_sid}/Versions"
     files = {"Content": ("sms.js", code, "application/javascript")}
-    data = {"Path": FUNCTION_PATH, "Visibility": "public"}
+    data = {"Path": FUNCTION_PATH, "Visibility": "protected"}
     r = twilio_request("POST", url, env, data=data, files=files)
     print(f"  ✓ Version: {r['sid']}")
     return r["sid"]
@@ -132,14 +194,67 @@ def ensure_chris_phone(env, service_sid, environment_sid):
     print("  ✓ Added CHRIS_PHONE")
 
 
-def create_build(env, service_sid, version_sid):
-    """Create a build with the new version."""
-    print("→ Building...")
+def create_build(env, service_sid, version_sid, function_sid):
+    """Create a build with the new version + ALL other current functions/assets preserved.
+
+    A Twilio Build is a snapshot — if you only pass FunctionVersions=<one>, all
+    other functions get DROPPED from production. We must include every other
+    function's current version SID and replace only the one we changed.
+    """
+    print("→ Building (preserving other functions)...")
+
+    # Get the currently-deployed build's function + asset versions
+    envs = twilio_request(
+        "GET", f"https://serverless.twilio.com/v1/Services/{service_sid}/Environments", env
+    ).get("environments", [])
+    if not envs or not envs[0].get("build_sid"):
+        raise SystemExit("  ✗ No current build to preserve from")
+    cur_build_sid = envs[0]["build_sid"]
+    cur = twilio_request(
+        "GET", f"https://serverless.twilio.com/v1/Services/{service_sid}/Builds/{cur_build_sid}", env
+    )
+
+    # Function versions: keep all except the one matching our function_sid
+    fn_versions = []
+    for fv in cur.get("function_versions", []):
+        if fv.get("function_sid") == function_sid:
+            print(f"  · replacing /{fv.get('path')} version: {fv['sid']} → {version_sid}")
+            fn_versions.append(version_sid)
+        else:
+            fn_versions.append(fv["sid"])
+    # If the function wasn't in the old build (new function), add the new version
+    if version_sid not in fn_versions:
+        fn_versions.append(version_sid)
+
+    # Asset versions: keep all unchanged
+    asset_versions = [av["sid"] for av in cur.get("asset_versions", [])]
+
+    print(f"  · build will include {len(fn_versions)} function version(s) + {len(asset_versions)} asset version(s)")
+
+    # Twilio API accepts repeated form params for list values
+    body_parts = [("FunctionVersions", v) for v in fn_versions]
+    body_parts += [("AssetVersions", v) for v in asset_versions]
+    if cur.get("dependencies"):
+        body_parts.append(("Dependencies", json.dumps(cur["dependencies"])))
+    body = urllib.parse.urlencode(body_parts)
+
+    sid = env["TWILIO_ACCOUNT_SID"]
+    tok = env["TWILIO_AUTH_TOKEN"]
+    auth = base64.b64encode(f"{sid}:{tok}".encode()).decode()
+    headers = {
+        "Authorization": f"Basic {auth}",
+        "Content-Type": "application/x-www-form-urlencoded",
+    }
     url = f"https://serverless.twilio.com/v1/Services/{service_sid}/Builds"
-    r = twilio_request("POST", url, env, data={"FunctionVersions": version_sid})
-    build_sid = r["sid"]
+    req = urllib.request.Request(url, data=body.encode(), method="POST", headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            result = json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        raise SystemExit(f"  ✗ Build POST failed: HTTP {e.code} — {e.read().decode()[:300]}")
+
+    build_sid = result["sid"]
     print(f"  · Build {build_sid} — waiting for completion...")
-    # Poll until status=completed
     status_url = f"{url}/{build_sid}/Status"
     for i in range(60):
         time.sleep(2)
@@ -187,7 +302,7 @@ def main():
         return
 
     version_sid = upload_version(env, service_sid, function_sid, code)
-    build_sid = create_build(env, service_sid, version_sid)
+    build_sid = create_build(env, service_sid, version_sid, function_sid)
     deployment_sid = deploy_build(env, service_sid, environment_sid, build_sid)
 
     print(f"\n═══ DEPLOY COMPLETE ═══")

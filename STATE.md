@@ -180,6 +180,12 @@ A `bootstrap_macbook.sh` script automating most of this will be written 2 PM tod
 5. **5 remaining Task-based dashboards** — Task report-type API rejection. Workaround: build via Lightning UI or use ActivityHistory with workaround.
 6. **MLS RETS subscription** — applied for? Need to confirm.
 7. **Twilio Advanced Opt-Out** — separate enablement (helps the v2 classifier reduce STOP false-negatives).
+8. **Twilio multi-number sender pool (TARGET: this week)** — currently all inbound + outbound goes through `+19549534554`. Needs:
+   - **Inbound routing**: provision 2-3 dedicated inbound numbers so different lead sources (PropertyLeads vs MotivatedSellers vs Constant Contact opt-in vs FB ads) route to different functions or get distinct branding.
+   - **Outbound sender pool**: provision 6 additional outbound numbers, group them in a Twilio Messaging Service so the SDK auto-rotates. Defeats T-Mobile/AT&T throttling that kicks in around ~200 msgs/day from a single 10DLC number.
+   - **A2P 10DLC compliance**: register Brand + Campaign in Twilio Console (takes 2-7 days for carrier approval). Without this, new numbers will be heavily filtered.
+   - **Cost estimate**: 8 new numbers × ~$1.15/mo = ~$9/mo + per-message fees. Plus one-time 10DLC registration ($4 brand + $10 campaign).
+   - **Implementation**: provision via API (`tools/twilio_provision_pool.py` to be written), update jb_sms.py to use Messaging Service SID instead of single From number.
 
 ---
 

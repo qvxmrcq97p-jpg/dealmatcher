@@ -53,7 +53,7 @@ SG_KEY=$(get_val SENDGRID_API_KEY)
 if [ -n "$SG_KEY" ]; then
     SG_RESP=$(curl -sS "https://api.sendgrid.com/v3/user/webhooks/event/settings" \
         -H "Authorization: Bearer $SG_KEY" --max-time 10)
-    if echo "$SG_RESP" | grep -q '"enabled": true'; then
+    if echo "$SG_RESP" | grep -qE '"enabled":\s*true'; then
         url=$(echo "$SG_RESP" | python3 -c "import json,sys; print(json.load(sys.stdin).get('url',''))")
         if echo "$url" | grep -q "sendgrid-events.cbfcalcio5.workers.dev"; then
             report "SendGrid webhook URL" PASS "$url"
@@ -145,9 +145,9 @@ echo ""
 echo "▶ 6. Cloudflare Worker secrets via /health"
 for w in propertyleads-ppl-worker motivatedsellers-ppl-worker railway-deploy-alerts; do
     if [ -f /tmp/cf_$w.json ]; then
-        if grep -q '"sendgrid": true' /tmp/cf_$w.json 2>/dev/null && grep -q '"twilio": true' /tmp/cf_$w.json 2>/dev/null; then
+        if grep -qE '"sendgrid":\s*true' /tmp/cf_$w.json 2>/dev/null && grep -qE '"twilio":\s*true' /tmp/cf_$w.json 2>/dev/null; then
             report "$w bindings (SG+Twilio)" PASS "all green in /health"
-        elif grep -q '"sendgrid": true' /tmp/cf_$w.json 2>/dev/null; then
+        elif grep -qE '"sendgrid":\s*true' /tmp/cf_$w.json 2>/dev/null; then
             report "$w bindings" PASS "SG green"
         fi
     fi

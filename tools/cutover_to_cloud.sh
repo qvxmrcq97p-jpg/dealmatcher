@@ -14,7 +14,7 @@ set -e
 
 LAUNCH_DIR="$HOME/Library/LaunchAgents"
 BACKUP_DIR="$HOME/Library/LaunchAgents.cutover-backup"
-UID=$(id -u)
+USER_UID=$(id -u)
 
 # All 7 plists that run the local-Mac side of the stack
 PLISTS=(
@@ -52,7 +52,7 @@ if [ "$MODE" = "rollback" ]; then
     for p in "${PLISTS[@]}"; do
         if [ -f "$BACKUP_DIR/$p" ]; then
             cp "$BACKUP_DIR/$p" "$LAUNCH_DIR/$p"
-            launchctl bootstrap gui/$UID "$LAUNCH_DIR/$p" 2>&1 || true
+            launchctl bootstrap gui/$USER_UID "$LAUNCH_DIR/$p" 2>&1 || true
             echo "  ✓ Restored $p"
         else
             echo "  · $p not in backup — skipped"
@@ -67,7 +67,7 @@ fi
 echo "→ Current state:"
 for p in "${PLISTS[@]}"; do
     label="${p%.plist}"
-    if launchctl print "gui/$UID/$label" &>/dev/null; then
+    if launchctl print "gui/$USER_UID/$label" &>/dev/null; then
         echo "  ● $p  — LOADED"
     elif [ -f "$LAUNCH_DIR/$p" ]; then
         echo "  ○ $p  — file exists but NOT loaded"
@@ -82,7 +82,7 @@ if [ "$MODE" = "dry-run" ]; then
     echo "═══ DRY RUN — what --apply would do ═══"
     echo ""
     echo "1. Create backup at $BACKUP_DIR"
-    echo "2. For each loaded plist: launchctl bootout gui/$UID/<label>"
+    echo "2. For each loaded plist: launchctl bootout gui/$USER_UID/<label>"
     echo "3. Move the .plist file to backup dir"
     echo "4. Verify each is no longer running"
     echo "5. Print final status"
@@ -127,8 +127,8 @@ echo ""
 echo "→ Booting out + moving plists..."
 for p in "${PLISTS[@]}"; do
     label="${p%.plist}"
-    if launchctl print "gui/$UID/$label" &>/dev/null; then
-        if launchctl bootout "gui/$UID/$label" 2>&1; then
+    if launchctl print "gui/$USER_UID/$label" &>/dev/null; then
+        if launchctl bootout "gui/$USER_UID/$label" 2>&1; then
             echo "  ✓ Booted out $label"
         else
             echo "  ! Bootout warning for $label (may be benign)"
@@ -146,7 +146,7 @@ echo "→ Verifying all are stopped..."
 all_clear=true
 for p in "${PLISTS[@]}"; do
     label="${p%.plist}"
-    if launchctl print "gui/$UID/$label" &>/dev/null; then
+    if launchctl print "gui/$USER_UID/$label" &>/dev/null; then
         echo "  ✗ $label  — STILL RUNNING"
         all_clear=false
     else
@@ -176,6 +176,6 @@ else
     echo "═══ INCOMPLETE — some daemons still running ═══"
     echo ""
     echo "Manual cleanup may be needed. Try:"
-    echo "  launchctl bootout gui/$UID/<label>"
+    echo "  launchctl bootout gui/$USER_UID/<label>"
     exit 2
 fi
