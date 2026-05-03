@@ -8,4 +8,4 @@ compatibility_date = "2024-10-01"
 # Paste the returned id below and re-deploy.
 [[kv_namespaces]]
 binding = "LAST_ALERT_AT"
-id      = "PASTE_KV_ID_HERE"
+id      = "920edcf9682341b2aa95fd910caad5ae"
