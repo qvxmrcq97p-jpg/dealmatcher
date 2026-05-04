@@ -115,6 +115,37 @@ If only an iPad / borrowed machine is available:
 
 ---
 
+## When something is broken (MBA workflow)
+
+1. `cd ~/dealmatcher && git pull`
+2. `python3 tools/pipeline_health_monitor.py` — gives you a 30-second health snapshot
+3. If it reports issues:
+   - Match the error text to entries in `docs/RUNBOOK.md` (search via `grep -i "<keyword>" docs/RUNBOOK.md`)
+   - Or read `docs/TROUBLESHOOTING.md` for a decision tree
+4. Apply the fix from the matched runbook entry
+5. Re-run the monitor to confirm fixed
+6. `git commit && git push` any code changes
+
+If the issue isn't documented yet:
+- Open Cowork on MBA → "Read STATE.md and RUNBOOK.md, then help me debug X"
+- After fixing, ask Claude to add the new entry to `docs/RUNBOOK.md` so the next person finds it
+
+## Where to find what
+
+| Looking for | Read |
+|---|---|
+| Current state of everything | `STATE.md` |
+| What's broken / what was just changed | `git log --since="yesterday" --oneline` |
+| How to fix a specific error | `docs/RUNBOOK.md` |
+| Where to start when something's wrong | `docs/TROUBLESHOOTING.md` |
+| Why we have alerts the way we do | `docs/MONITORING.md` |
+| How the deal scraper works | `docs/SCRAPER_GUIDE.md` |
+| Railway services + how to add new ones | `docs/RAILWAY_SERVICES.md` |
+| Product strategy (DealMatcher Pro tiers) | `PRODUCT_STRATEGY.md` |
+| Tomorrow's funnel build | `BUILD_PLAN.md` |
+| Daily routine (Chris's recurring job) | `DAILY_PLAYBOOK.md` |
+| Active task list | `TODO.md` |
+
 ## Recovery scenarios
 
 ### "My MBA SSH key isn't on the right GitHub account"

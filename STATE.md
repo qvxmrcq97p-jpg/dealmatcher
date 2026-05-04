@@ -16,8 +16,11 @@
 > - `TODO.md` — cross-Mac running task list. Always check this for current priorities.
 >
 > **Subsystem guides** (read if user wants to fix or extend a specific subsystem):
+> - `docs/TROUBLESHOOTING.md` — START HERE when user reports something broken. Decision tree for diagnosis.
+> - `docs/RUNBOOK.md` — paste-the-fix for every known error. Always grep this BEFORE diagnosing fresh.
+> - `docs/MONITORING.md` — alerting architecture (4 layers). Read when adding a new check or debugging "no alerts firing."
 > - `docs/SCRAPER_GUIDE.md` — deal scraper + parser + WhatsApp ingestion. Read if user mentions scraper, parser, deals from email, deals from WhatsApp, wholesaler senders, buy-box matching.
-> - `docs/RUNBOOK.md` — paste-the-fix for every known error. Read first if user reports an error.
+> - `docs/CLOUD_DEPLOY.md` — Railway services + Cloudflare Workers deploy details.
 
 ---
 
@@ -260,7 +263,16 @@ bash tools/cutover_to_cloud.sh --rollback
 - May 1: Sell Score v2 finalized
 - May 2: Master plan PDF (18 pages)
 - May 3 AM: Phase 1 (GitHub) + Phase 2 (Railway 8 services) + Phase 3 (5 CF Workers) + Phase 4 (secrets + 3 webhooks)
-- May 3 PM (in progress): Phase 5 (Twilio v2) + Phase 6 (plist cutover) + smoke test + MBA bootstrap
+- May 3 PM: Phase 5 (Twilio v2) + Phase 6 (plist cutover) + smoke test + MBA bootstrap docs
+- May 4 AM: Major silent-failure remediation day:
+  - Discovered scraper Graph auth had been failing since May 2 — fixed via auto-load .env + token cache override
+  - Discovered SF security token was stale on all 3 PPL workers — rotated and propagated
+  - Discovered WhatsApp Worker was missing SHARED_SECRET + SENDGRID_API_KEY — set both
+  - Built 3-layer monitoring: scraper safeguards + Pipeline Health Monitor + Railway deploy webhook (Layer 2 was already there)
+  - Created `tools/audit_scraper_accuracy.py`, `tools/test_scrape_recent.py`, `tools/refresh_graph_token.py`, `tools/replay_failed_leads.py`, `tools/pipeline_health_monitor.py`, `tools/fix_whatsapp_worker_secrets.sh`, `tools/update_sf_security_token.sh`
+  - Created `docs/TROUBLESHOOTING.md`, `docs/MONITORING.md`, expanded `docs/RUNBOOK.md` and `docs/SCRAPER_GUIDE.md` with all incidents
+  - Verified pipeline producing real volume: 16 wholesaler/WA emails → 205 clean deals in 12h
+  - Parser quality: 95% addresses+prices clean, sqft/bed extraction has systematic issues (queued for fix)
 
 ---
 

@@ -2,6 +2,81 @@
 
 When something errors during the migration or daily ops, find the symptom below and paste the fix. If your error isn't here, paste it to me and I'll tell you the fix and add it to this doc.
 
+> **For Claude (any session):** This is the FIRST thing to read when the user reports an error. Search this doc for the error text or symptom before diagnosing fresh. If the error isn't here, after fixing it, add a new entry so the next person finds it.
+
+---
+
+## Pipeline silent failures (May 4, 2026 — incidents we hit during go-live)
+
+### `INVALID_LOGIN: Invalid username, password, security token; or user locked out` (Salesforce)
+**Cause:** SF security token stale. SF auto-rotates the token whenever you reset your password OR sign in from a new IP. The Cloudflare Worker secrets store the OLD token.
+**Fix:**
+1. Get the current security token: SF → avatar → Settings → My Personal Information → Reset My Security Token (emails new token in 60s) — or copy the latest one if you already have it.
+2. Run on your Mac:
+   ```
+   cd ~/dealmatcher && bash tools/update_sf_security_token.sh
+   ```
+   Paste new token when prompted. Script updates `.env` + all 3 Workers (propertyleads, motivatedsellers, sendgrid-events) + tests SF auth.
+3. Verify worker: send a test lead via curl (script prints the command at the end).
+
+### `SendGrid error 401` from a Cloudflare Worker
+**Cause:** Stale or missing `SENDGRID_API_KEY` in worker secrets.
+**Fix (general):**
+```
+cd ~/dealmatcher/cloudflare/<worker-name>
+echo "<SENDGRID_API_KEY>" | wrangler secret put SENDGRID_API_KEY
+```
+**Fix for WhatsApp worker specifically:**
+```
+cd ~/dealmatcher && bash tools/fix_whatsapp_worker_secrets.sh
+```
+This sets all 4 secrets (SG key, FROM_EMAIL, TO_EMAIL, SHARED_SECRET) at once.
+
+### WhatsApp worker `last_message_at: null` despite Green-API being on
+**Cause #1:** `SHARED_SECRET` not set on worker — every webhook gets 401.
+**Cause #2:** Green-API webhook URL or token mismatch.
+**Cause #3:** Phone disconnected from Green-API (WhatsApp Web session expired).
+**Fix:**
+1. Check `/health` bindings.shared_secret — if false, run `bash tools/fix_whatsapp_worker_secrets.sh`
+2. Verify Green-API config:
+   - webhookUrl: `https://cheaphomesfla-whatsapp-webhook.cbfcalcio5.workers.dev/`
+   - webhookUrlToken: value from `WA_SHARED_SECRET` in `.env`
+   - notifications enabled: `incomingMessageReceived` AND `incomingMessageReceivedGroup`
+3. Test directly with the curl command in `docs/SCRAPER_GUIDE.md` "Common issues" section.
+
+### Scraper logs `FATAL: Device flow init failed: ... 'client_id'` (Microsoft Graph)
+**Cause:** `GRAPH_CLIENT_ID` and/or `GRAPH_TENANT_ID` env vars missing or set to placeholder.
+**Fix locally:** scraper now auto-loads `.env.cheaphomesfla` at startup — should self-correct after `git pull`.
+**Fix on Railway:** add 3 env vars to service `dealmatcher` → Variables:
+- `GRAPH_CLIENT_ID = b2143511-d5e1-49d9-a121-8df37116b895`
+- `GRAPH_TENANT_ID = 8dd6dc0e-8291-438e-b64f-57dbd2854c38`
+- `GRAPH_TOKEN_CACHE_B64` = paste contents of `~/Desktop/graph_token_cache_b64.txt`
+
+### Scraper logs `Unable to get authority configuration ... <paste tenant id from step 6>`
+**Cause:** Stale shell env var. Some prior session set `GRAPH_TENANT_ID` to a literal placeholder.
+**Fix:**
+```
+unset GRAPH_TENANT_ID GRAPH_CLIENT_ID
+grep -i "GRAPH_" ~/.zshrc ~/.zprofile ~/.bashrc ~/.bash_profile
+```
+If grep returns lines setting these to placeholders, edit those rc files and remove them. Restart Terminal.
+
+### Refresh token expires (~85 days from last device flow)
+**Symptom:** scraper safeguards SMS you "Graph refresh token is N days old".
+**Fix:**
+```
+cd ~/dealmatcher && python3 tools/refresh_graph_token.py
+```
+Runs device flow on local Mac, copies new base64 to clipboard. Paste into Railway → service `dealmatcher` → Variables → `GRAPH_TOKEN_CACHE_B64`.
+
+### Pipeline Health Monitor reports all workers as `HTTP Error 403: Forbidden`
+**Cause:** Cloudflare bot detection blocking Python's default User-Agent.
+**Fix:** the monitor sets a Mozilla UA. If you see this, `git pull` to grab the patched version.
+
+### Test scrape says `bad-addr: 35` but parser samples look fine
+**Cause:** test_scrape_recent.py was checking wrong field name (`address` vs `property_address`). Fixed in commit after May 4.
+**Fix:** `git pull` on the affected machine.
+
 ---
 
 ## Phase 1 — GitHub push errors

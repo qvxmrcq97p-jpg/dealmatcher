@@ -7,6 +7,40 @@
 
 ---
 
+## ⚡ MONITORING + SAFEGUARDS NOW RUNNING
+
+After today's cascade of silent failures (scraper auth, SF token, WA secrets), we built layered alerting:
+
+| Layer | What | Where |
+|---|---|---|
+| 1 | Scraper safeguards (3 alert types) | `tools/scraper_safeguards.py` wraps `cheaphomesfla_scraper.py:main()` |
+| 2 | Railway deploy alerts | already running |
+| 3 | Pipeline Health Monitor (hourly) | `tools/pipeline_health_monitor.py` — needs Railway service deployment |
+| 4 | Daily KPI email (9:30 AM ET) | already running |
+
+**Read first when something breaks:** `docs/TROUBLESHOOTING.md` (decision tree) → `docs/RUNBOOK.md` (paste-the-fix).
+
+---
+
+## ⚠️ STILL TO DEPLOY (today)
+- [ ] **Push everything to GitHub** — `cd ~/dealmatcher && git add -A && git commit -m "May 4 silent-failure remediation: 3-layer monitoring + scraper auth fix + SF token rotation + WA worker fix" && git push origin main`
+- [ ] **Set Railway env vars on `dealmatcher` service:**
+  - `GRAPH_CLIENT_ID = b2143511-d5e1-49d9-a121-8df37116b895`
+  - `GRAPH_TENANT_ID = 8dd6dc0e-8291-438e-b64f-57dbd2854c38`
+  - `GRAPH_TOKEN_CACHE_B64` = paste contents of `~/Desktop/graph_token_cache_b64.txt`
+- [ ] **Deploy `pipeline_health_monitor` as Railway cron service** — see "Adding new Railway services" section below
+- [ ] **Replay lost Motivated Sellers leads** — `python3 tools/replay_failed_leads.py --dry-run --days=14` then drop --dry-run if count is reasonable
+
+## 📝 PARSER REFINEMENT (queued — quality not blocking)
+
+Today's 12h test showed 205 clean deals from 17 emails (93% extraction rate). Quality issues to fix:
+- [ ] sqft extraction systematically wrong — picks up tiny numbers (50, 56, 5) instead of ~1500. Likely confusing room sqft vs total or grabbing other digits.
+- [ ] Some addresses include surrounding text: `25 mi... 1201 NW 21 St`. Should strip distance prefixes.
+- [ ] Address `000 XXX Ne 129 St` — clearly a parser miss, low priority.
+- [ ] Add unit tests for these specific failure cases in `tests/test_parser.py` before fixing.
+
+---
+
 ## TODAY (Mon May 4 — migration deadline + restart of CC sends)
 
 ### URGENT (must run today)
