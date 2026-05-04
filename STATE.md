@@ -7,6 +7,17 @@
 - **CheapHomesFLA** — off-market investor deal flow (we sell discounted houses to buyers)
 
 > **For Claude (any session, any machine):** Read this file first. It captures everything currently deployed, every credential location, every pending task. After reading, ask the user "what do you want to work on?" — don't recap, just continue.
+>
+> **Sister docs to read for full context (skim only if relevant to the task):**
+> - `PRODUCT_STRATEGY.md` — DealMatcher Pro pricing tiers, scope, GTM, revenue model. Read if user mentions sales, marketing, productized service, or pricing.
+> - `BUILD_PLAN.md` — 3-hour funnel build spec (Tue May 5). Read if user is working on landing page / Stripe / lead capture worker.
+> - `DAILY_PLAYBOOK.md` — Chris's daily 30-min routine + business model. Read if user is asking about workflow or how to spend a day.
+> - `MOBILE_DEV.md` — switching between Macs. Read on first MBA session.
+> - `TODO.md` — cross-Mac running task list. Always check this for current priorities.
+>
+> **Subsystem guides** (read if user wants to fix or extend a specific subsystem):
+> - `docs/SCRAPER_GUIDE.md` — deal scraper + parser + WhatsApp ingestion. Read if user mentions scraper, parser, deals from email, deals from WhatsApp, wholesaler senders, buy-box matching.
+> - `docs/RUNBOOK.md` — paste-the-fix for every known error. Read first if user reports an error.
 
 ---
 
@@ -170,6 +181,28 @@ A `bootstrap_macbook.sh` script automating most of this will be written 2 PM tod
 - For long file paths in conversation, use `~/dealmatcher/` not the absolute /Users path.
 
 ---
+
+## 🏢 Productized service — what gets SOLD vs what stays MINE
+
+**Sold (industry-agnostic, any vertical):**
+- Landing page / funnel design
+- Email capture wired to client's CRM (SF, HubSpot, etc.)
+- Email drip sequences (SendGrid)
+- SMS automation including smart classifier (Twilio + sms_v2)
+- Stripe checkout for client's products
+- Cloudflare Workers infrastructure (webhooks, alerts, KPI)
+- Deal Q&A Agent (Claude-powered AI middleman for inbound questions)
+- Monthly KPI dashboard + alerts
+- **Ad-spend management (FB/Google)** — included in $4,999+$2,999mo Managed tier
+
+**Kept (CHF/JB moat — never sold):**
+- CHF scraper code + deal sources
+- sell_score / buyer_score scoring models
+- PropertyRadar / ATTOM integrations
+- Buyer-to-deal matching engine
+- Real-estate sector knowledge / judgment
+
+This separation is critical for pitch positioning. The product is "we run your customer acquisition machine," NOT "we'll find you deals."
 
 ## 📝 Open questions / future work (non-urgent)
 
