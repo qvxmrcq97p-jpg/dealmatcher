@@ -7,6 +7,36 @@
 
 ---
 
+## TODAY (Mon May 4 — migration deadline + restart of CC sends)
+
+### URGENT (must run today)
+- [ ] **8:00 AM** — Watch JB email auto-fire from Railway; verify in inbox + SF Lead `Last_Email_Sent__c`
+- [ ] **8:15 AM** — Watch JB SMS auto-fire from Railway; verify on phone
+- [ ] **9:00 AM** — Read the daily KPI email; confirm numbers look right
+- [ ] **10:00 AM** — First CHF scrape of the day (Railway service `dealmatcher`); confirms scraper running
+- [ ] **10:30 AM** — Run new daily-aggregate-email build (see below); generates "Today's 5 Outlier Deals" HTML
+- [ ] **10:55 AM** — Paste HTML into Constant Contact, schedule send for 11:00 AM (or auto-send via CC API if upgraded)
+- [ ] **11:00 AM** — CC blast goes out to existing list (first campaign restart since migration)
+- [ ] Build 5 remaining SF Task-based dashboards via Lightning UI (~75 min total — can do during afternoon)
+- [ ] Final smoke test + commit + push by EOD
+
+### Build NEW: Daily 11 AM CC Aggregate Email
+- [ ] Build `tools/build_daily_cc_email.py`:
+  - Runs at 10:30 AM ET (Railway cron)
+  - Queries SF for today's scraped deals (matched to Property/Lead records from the morning scraper run)
+  - Picks top 5 outliers (using $/sqft once ATTOM data lands; until then, lowest list price relative to size)
+  - Renders polished HTML email with: address, list price, photos, "why it's a deal" data card, link to landing page
+  - **v1 (manual paste):** emails the HTML to Chris at info@cheaphomesfla.com — Chris pastes into CC composer
+  - **v2 (auto-send):** if CC API plan, posts directly to CC and schedules send for 11 AM
+- [ ] Add Railway cron service `daily_cc_email` with schedule `30 14 * * *` (10:30 AM ET in UTC)
+- [ ] Decision needed: check Constant Contact plan tier — does it include API access? If not, decide whether to upgrade or stay on manual-paste flow
+
+### Constant Contact plan check
+- [ ] Log into CC, verify current plan tier (Lite / Standard / Premium)
+- [ ] If on Lite or Standard: API access may be limited; manual-paste workflow is fine for first 2-3 weeks
+- [ ] Decision: upgrade now ($35-80/mo) for full automation, OR plan migration to SendGrid (already on $0/free Email API tier with 100/day) within next 30 days
+- [ ] **Recommended:** stay on current CC plan; use manual paste; commit to SG migration in late May to consolidate billing
+
 ## TONIGHT (5–11 PM ET)
 
 ### Quick wins (5–10 min each)

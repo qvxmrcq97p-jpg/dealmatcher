@@ -64,6 +64,26 @@ for p in (_SCRIPT_DIR, _SCRIPT_DIR / "tools"):
     if str(p) not in sys.path:
         sys.path.insert(0, str(p))
 
+# Auto-load .env.cheaphomesfla on startup. Existing OS env vars take
+# precedence — this only fills in MISSING values. On Railway, the
+# dashboard env vars take precedence (the .env file isn't deployed there).
+def _autoload_env():
+    env_file = _SCRIPT_DIR / ".env.cheaphomesfla"
+    if not env_file.exists():
+        return
+    placeholder_pat = re.compile(r"^<.*>$")  # e.g. "<paste tenant id from step 6>"
+    for line in env_file.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, _, v = line.partition("=")
+        k, v = k.strip(), v.strip()
+        # Override existing env vars if they look like unfilled placeholders
+        existing = os.getenv(k, "")
+        if not existing or placeholder_pat.match(existing):
+            os.environ[k] = v
+_autoload_env()
+
 # parser.py — clean, unit-tested replacement for the inline parsing
 # logic that lived in v1. See ~/dealmatcher/tests/test_parser.py.
 from parser import (  # noqa: E402
@@ -255,12 +275,53 @@ def load_wholesaler_addresses() -> set[str]:
 # =============================================================================
 
 def graph_access_token() -> str:
-    """MSAL device-code auth, cached after first sign-in."""
+    """MSAL auth with delegated token cache.
+
+    Cloud-friendly load order (first match wins):
+      1. GRAPH_TOKEN_CACHE_B64 env var (Railway/headless: base64-encoded cache JSON)
+      2. TOKEN_CACHE_FILE on disk (Mac/launchd: persisted cache from prior run)
+
+    On the Mac, refreshes are persisted back to TOKEN_CACHE_FILE.
+    On Railway, the env var is the source of truth — refreshes during a run
+    aren't persisted (the original refresh token from the env var keeps
+    working until expiry, ~90d, since Microsoft's v2 endpoint allows
+    overlapping refresh tokens).
+
+    First-time sign-in (device flow) is only attempted if no cache exists
+    AND we're running interactively (TTY available). On Railway, missing
+    cache is a fatal error with clear instructions.
+    """
+    import base64
+    import sys
+
     import msal  # noqa: WPS433
 
+    if not GRAPH_CLIENT_ID:
+        raise RuntimeError(
+            "GRAPH_CLIENT_ID env var is empty. "
+            "Set it to the Azure AD app's Application (client) ID. "
+            "For info@cheaphomesfla.com tenant: b2143511-d5e1-49d9-a121-8df37116b895"
+        )
+
     cache = msal.SerializableTokenCache()
-    if TOKEN_CACHE_FILE.exists():
-        cache.deserialize(TOKEN_CACHE_FILE.read_text())
+
+    # Source 1: env var (preferred for cloud)
+    cache_b64 = os.getenv("GRAPH_TOKEN_CACHE_B64", "").strip()
+    cache_loaded_from = None
+    if cache_b64:
+        try:
+            cache.deserialize(base64.b64decode(cache_b64).decode("utf-8"))
+            cache_loaded_from = "env:GRAPH_TOKEN_CACHE_B64"
+        except Exception as e:
+            raise RuntimeError(f"Failed to decode GRAPH_TOKEN_CACHE_B64: {e}")
+
+    # Source 2: disk file (preferred for Mac with launchd)
+    if not cache_loaded_from and TOKEN_CACHE_FILE.exists():
+        try:
+            cache.deserialize(TOKEN_CACHE_FILE.read_text())
+            cache_loaded_from = f"file:{TOKEN_CACHE_FILE}"
+        except Exception as e:
+            print(f"WARN: failed to load token cache from disk: {e}", flush=True)
 
     app = msal.PublicClientApplication(
         GRAPH_CLIENT_ID,
@@ -272,14 +333,29 @@ def graph_access_token() -> str:
     result = app.acquire_token_silent(GRAPH_SCOPES, account=accounts[0]) if accounts else None
 
     if not result:
+        # No cached token — try device flow only if we're interactive (Mac/dev).
+        # On Railway, this is fatal.
+        is_interactive = sys.stdin.isatty()
+        if not is_interactive:
+            raise RuntimeError(
+                "No cached Graph token and not running interactively. "
+                "Set GRAPH_TOKEN_CACHE_B64 env var with a fresh device-flow cache. "
+                "Generate one with: python3 tools/refresh_graph_token.py"
+            )
         flow = app.initiate_device_flow(scopes=GRAPH_SCOPES)
         if "user_code" not in flow:
             raise RuntimeError(f"Device flow init failed: {flow}")
-        print(flow["message"], flush=True)   # visible in launchd log first-run
+        print(flow["message"], flush=True)
         result = app.acquire_token_by_device_flow(flow)
 
-    if cache.has_state_changed:
-        TOKEN_CACHE_FILE.write_text(cache.serialize())
+    # Persist refreshed cache to disk (Mac path) — Railway env-var is read-only,
+    # so we just don't write anything back there. The original refresh token
+    # remains valid until expiry.
+    if cache.has_state_changed and cache_loaded_from != "env:GRAPH_TOKEN_CACHE_B64":
+        try:
+            TOKEN_CACHE_FILE.write_text(cache.serialize())
+        except Exception as e:
+            print(f"WARN: couldn't persist token cache to disk: {e}", flush=True)
 
     if "access_token" not in result:
         raise RuntimeError(f"Graph auth failed: {result.get('error_description')}")
@@ -1021,8 +1097,10 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    try:
-        main()
-    except Exception as e:  # noqa: BLE001
-        log.exception("FATAL: %s", e)
-        sys.exit(1)
+    # Wrap main() with three-layer safeguards:
+    #   1. Inline SMS+email on fatal exception
+    #   2. SMS+email if 3+ consecutive runs produce zero deals (quiet failure detector)
+    #   3. Heartbeat file at logs/scraper_heartbeat.json (read by system_watchdog)
+    # See tools/scraper_safeguards.py for details.
+    from tools.scraper_safeguards import safeguard_run
+    safeguard_run(main)

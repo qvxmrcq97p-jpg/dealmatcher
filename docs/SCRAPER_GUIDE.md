@@ -94,6 +94,36 @@ To verify it's receiving WA messages, hit /health — `last_msg_at` should be wi
 
 ## Common issues + how to fix
 
+### "Microsoft Graph auth fails — AADSTS900144 / 'client_id' missing / tenant placeholder error"
+
+This was the May 4, 2026 incident. Symptoms in Railway logs:
+```
+ERROR: FATAL: Device flow init failed: AADSTS900144: ... 'client_id'
+```
+or
+```
+Unable to get authority configuration for https://login.microsoftonline.com/<paste tenant id from step 6>
+```
+
+**Root cause:** `GRAPH_CLIENT_ID` and/or `GRAPH_TENANT_ID` env vars are unset OR contain a leftover placeholder string. Scraper's `os.getenv()` only reads OS environment, not `.env` files (without our auto-load patch).
+
+**Fix:**
+1. The scraper now auto-loads `.env.cheaphomesfla` at startup (and overrides env vars that look like placeholder strings, e.g. `<paste tenant id from step 6>`). If you've pulled latest code, this should "just work."
+2. On Railway, ensure these 3 env vars are set in service `dealmatcher` → Variables:
+   - `GRAPH_CLIENT_ID = b2143511-d5e1-49d9-a121-8df37116b895`
+   - `GRAPH_TENANT_ID = 8dd6dc0e-8291-438e-b64f-57dbd2854c38`
+   - `GRAPH_TOKEN_CACHE_B64 = (base64 of ~/Desktop/.graph_token_cache.bin)`
+3. To regenerate the token cache (when refresh token expires ~90 days):
+   ```bash
+   python3 tools/refresh_graph_token.py
+   ```
+   It runs device flow locally, copies new base64 to clipboard, instruct Railway paste.
+4. To clean leftover placeholder env vars in your shell: `unset GRAPH_TENANT_ID GRAPH_CLIENT_ID && grep -i "GRAPH_" ~/.zshrc`
+
+**Prevention:** the safeguards module (`tools/scraper_safeguards.py`) now alerts via SMS+email within 60 sec of any fatal exception. Plus heartbeat tracking + token-expiry warnings 14 days before refresh token dies.
+
+---
+
 ### "Parser is producing junk addresses"
 The parser is conservative by design (rejects ambiguous matches). If a wholesaler's format isn't being parsed:
 1. Save a sample of their email body to `tests/samples/<wholesaler>.txt`
