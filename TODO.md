@@ -138,6 +138,41 @@ Today's 12h test showed 205 clean deals from 17 emails (93% extraction rate). Qu
 
 ---
 
+## 🚀 PROPSTREAM INTEGRATION (priority data source — replaces ATTOM)
+
+**Decision (May 4):** PropStream over ATTOM. One $199/mo subscription powers:
+- Buyer-side: build out the investor database for daily blast targeting
+- Seller-side: distressed seller leads for Johnson Buys outreach
+- Enrichment: verify bed/bath/sqft on each scraped deal (replaces missing/wrong wholesaler data)
+- Training data: historical sold home records → feed sell_score_v3 ML model
+
+### This week — PropStream rollout
+- [ ] **Sign up for PropStream 7-day free trial** at propstream.com
+- [ ] Verify it covers FL counties at the depth needed (it does — but confirm in trial)
+- [ ] Upgrade to **Premium ($199/mo)** for API access if trial proves out
+- [ ] Get API key → save to `.env.cheaphomesfla` as `PROPSTREAM_API_KEY`
+- [ ] Set Railway env var `PROPSTREAM_API_KEY` for cloud scripts
+
+### Scripts to build (~6 hr work spread Tue–Thu)
+- [ ] `tools/propstream_enrich.py` — per-deal enrichment after scraper run (verifies bed/bath/sqft, adds owner LLC, distress flags)
+- [ ] `tools/propstream_investor_index.py` — pulls top 100 investors per FL county weekly; saves to SF as Contacts with `LeadSource = "PropStream Investor Index"`
+- [ ] `tools/propstream_seller_leads.py` — pulls distressed-seller leads weekly (foreclosure, tax delinquent, probate, code violations) for Johnson Buys cold outreach
+- [ ] `tools/build_investor_index_pdf.py` — generates monthly "Top 100 Investors in [County]" PDF lead magnet (CHF marketing asset)
+
+### After integration runs for 30 days
+- [ ] Pull historical sold-home data (each property + signals that preceded sale)
+- [ ] Train `sell_score_v3` ML model on the data
+- [ ] Output: per-property "likelihood to sell within 60 days at X% below market" score
+- [ ] Use score to prioritize daily-blast deals + investor outreach
+
+### Result by end of May 2026
+- ~5,000-10,000 verified active investors auto-added to CC list (from PropStream)
+- Daily emails go to a much larger, higher-quality database
+- Each scraped deal has verified property data + distress flags
+- sell_score_v3 starts producing predictive scores on day 30+ of training data
+
+---
+
 ## 📊 DATA INFRASTRUCTURE (the next big leverage layer)
 
 The whole stack gets dramatically smarter once we have these data sources wired up. Data unlocks better targeting, better products, better lead magnets.

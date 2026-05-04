@@ -92,7 +92,59 @@ def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--hours", type=int, default=24)
     p.add_argument("--top-per-county", type=int, default=5)
+    p.add_argument("--no-email", action="store_true", help="Skip emailing the preview to ALERT_TO")
     return p.parse_args()
+
+
+def send_preview_email(html: str, summary: str, subject: str = None):
+    """Email the preview HTML to ALERT_TO (info@johnsonbuys.com) via SendGrid
+    so Chris can review on his phone / forward / edit."""
+    import urllib.request
+
+    env = {}
+    env_file = REPO / ".env.cheaphomesfla"
+    if env_file.exists():
+        for line in env_file.read_text().splitlines():
+            if "=" in line and not line.startswith("#"):
+                k, _, v = line.partition("=")
+                env[k.strip()] = v.strip()
+
+    if not env.get("SENDGRID_API_KEY"):
+        print("⚠ SENDGRID_API_KEY missing — skipping email")
+        return False
+
+    to_email = env.get("ALERT_TO") or env.get("FROM_EMAIL") or "info@johnsonbuys.com"
+    from_email = env.get("FROM_EMAIL") or "info@johnsonbuys.com"
+    subj = subject or f"📋 PREVIEW — Today's CC blast (review/edit before sending)"
+
+    payload = {
+        "personalizations": [{"to": [{"email": to_email}]}],
+        "from": {"email": from_email, "name": "DealMatcher Preview"},
+        "subject": subj,
+        "content": [
+            {"type": "text/plain", "value": f"PREVIEW of today's CC blast.\n\n{summary}\n\nReply to this email if you want to discuss layout/content changes.\n\nThe HTML preview is below."},
+            {"type": "text/html", "value": html},
+        ],
+    }
+
+    import json as _json
+    body = _json.dumps(payload).encode()
+    req = urllib.request.Request(
+        "https://api.sendgrid.com/v3/mail/send",
+        data=body,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {env['SENDGRID_API_KEY']}",
+            "Content-Type": "application/json",
+        },
+    )
+    try:
+        urllib.request.urlopen(req, timeout=20)
+        print(f"  ✓ Preview emailed to {to_email}")
+        return True
+    except Exception as e:
+        print(f"  ✗ Email send failed: {e}")
+        return False
 
 
 def main():
@@ -226,13 +278,12 @@ def main():
             price = d.get("asking_price")
             beds = d.get("beds") or "?"
             sqft = d.get("sqft") or "?"
-            beds_str = f"{int(beds)}bd" if isinstance(beds, (int, float)) and beds else "?bd"
-            sqft_str = f"{int(sqft):,} sqft" if isinstance(sqft, (int, float)) and sqft else "?sqft"
-
-            # NOTE: source attribution intentionally NOT shown in the email body —
-            # that's our backend supply chain. Wholesaler info is in d.get("wholesaler_name")
-            # and the deal ledger. Buyers who reply asking about a deal: look it up
-            # internally + reach out to that wholesaler on their behalf.
+            # NOTE: bed/bath/sqft INTENTIONALLY hidden — wholesaler-typed values
+            # are unreliable (often grab lot dimensions, building age, or wrong
+            # numbers as sqft). Will re-enable once ATTOM Data API enrichment lands
+            # and we have ground-truth from county records.
+            #
+            # Source attribution also not shown — that's our backend supply chain.
 
             html_chunks.append(f'''
             <tr><td style="padding:18px 25px; border-bottom:1px solid #eee;">
@@ -245,10 +296,8 @@ def main():
                     <div style="font-weight:bold; font-size:16px; color:#222;">{addr}</div>
                     <div style="font-size:13px; color:#666; margin:2px 0;">{city}{', ' + state if city else state} {zip_code}</div>
                     <div style="font-size:22px; color:#0a7c2f; margin:8px 0; font-weight:bold;">${price:,}</div>
-                    <div style="font-size:13px; color:#888;">{beds_str} &nbsp;•&nbsp; {sqft_str}</div>
                     <div style="margin-top:12px;">
-                      <a href="mailto:info@cheaphomesfla.com?subject=I%27m%20interested%20in%20%23{i}%20{escape(c.replace(' ', '%20'))}%20-%20{escape(addr.replace(' ', '%20')[:60])}&body=Hi%20Chris%2C%0A%0AI%27m%20interested%20in%20deal%20%23{i}%20in%20{escape(c.replace(' ', '%20'))}%20County%20-%20{escape(addr.replace(' ', '%20')[:60])}.%0A%0APlease%20send%20me%20more%20details%20%2B%20photos.%0A%0AMy%20info%3A%0AName%3A%0APhone%3A%0AEntity%3A%0ABuy%20box%3A%0A%0AThanks%21" style="display:inline-block; padding:10px 18px; background:#0a7c2f; color:#fff; text-decoration:none; border-radius:6px; font-size:14px; font-weight:bold; margin-right:8px;">📨 I want this</a>
-                      <a href="https://cheaphomesfla.com/deals?utm_source=cc&utm_medium=email&utm_campaign=daily_deals&utm_content={today_str}_{escape(c.split()[0]).lower()}_{i}" style="display:inline-block; padding:10px 18px; background:#fff; color:#0a66c2; border:1px solid #0a66c2; text-decoration:none; border-radius:6px; font-size:14px; font-weight:bold;">View on site</a>
+                      <a href="mailto:info@cheaphomesfla.com?subject=I%27m%20interested%20in%20%23{i}%20{escape(c.replace(' ', '%20'))}%20-%20{escape(addr.replace(' ', '%20')[:60])}&body=Hi%20Chris%2C%0A%0AI%27m%20interested%20in%20deal%20%23{i}%20in%20{escape(c.replace(' ', '%20'))}%20County%20-%20{escape(addr.replace(' ', '%20')[:60])}.%0A%0APlease%20send%20me%20more%20details%20%2B%20photos.%0A%0AMy%20info%3A%0AName%3A%0APhone%3A%0AEntity%3A%0A%0AThanks%21" style="display:inline-block; padding:10px 18px; background:#0a7c2f; color:#fff; text-decoration:none; border-radius:6px; font-size:14px; font-weight:bold;">📨 I want full details on this</a>
                     </div>
                   </td>
                 </tr>
@@ -256,15 +305,19 @@ def main():
             </td></tr>
             ''')
 
-        # "See more" CTA at the end of each county section if there are more deals than shown
+        # "See more" CTA — drives to buyer form pre-filled with this county
         remaining = len(deals) - args.top_per_county
         if remaining > 0:
+            county_slug = c.lower().replace(' ', '-').replace('.', '')
             html_chunks.append(f'''
-            <tr><td style="padding:12px 25px 22px; text-align:center; background:#fafafa;">
-              <div style="font-size:14px; color:#444;">
-                <strong>{remaining} more {escape(c)} County deal{'s' if remaining != 1 else ''}</strong>
-                — reply <strong>"{escape(c.split()[0]).upper()}"</strong> for the full list.
+            <tr><td style="padding:14px 25px 24px; text-align:center; background:#fafafa;">
+              <div style="font-size:14px; color:#555; margin-bottom:10px;">
+                <strong>{remaining} more {escape(c)} County deal{'s' if remaining != 1 else ''}</strong> we hand-filtered today.
               </div>
+              <a href="https://cheaphomesfla.com/buyer-form?utm_source=cc&utm_medium=email&utm_campaign=daily_deals&counties={county_slug}&utm_content={today_str}_{county_slug}_more"
+                 style="display:inline-block; padding:11px 22px; background:#0a66c2; color:#fff; text-decoration:none; border-radius:6px; font-size:14px; font-weight:bold;">
+                Get all {escape(c)} deals → tell us your criteria
+              </a>
             </td></tr>
             ''')
 
@@ -310,8 +363,18 @@ def main():
         subprocess.run(["open", str(out_html)], check=False)
     except Exception:
         pass
-
     print(f"\n✓ Preview opened in default browser.")
+
+    # Email the preview HTML to ALERT_TO so Chris can review on phone / forward
+    if not args.no_email:
+        full_html = "".join(html_chunks)
+        summary = (
+            f"Window: last {args.hours}h\n"
+            f"Counties: {len(sorted_counties)}\n"
+            f"Total clean deals: {len(clean)}\n"
+            f"Top {args.top_per_county} per county displayed."
+        )
+        send_preview_email(full_html, summary)
 
 
 if __name__ == "__main__":
