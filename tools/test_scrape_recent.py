@@ -46,7 +46,7 @@ def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--hours", type=int, default=12)
     p.add_argument("--show-misses", action="store_true")
-    p.add_argument("--max-misses", type=int, default=20)
+    p.add_argument("--max-misses", type=int, default=200)
     return p.parse_args()
 
 

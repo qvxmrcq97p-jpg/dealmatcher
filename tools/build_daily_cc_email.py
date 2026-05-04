@@ -145,6 +145,27 @@ def pick_top_outliers(deals, top=5):
 
 def render_html(deals, today_str):
     """Polished, mobile-first HTML for CC composer paste."""
+    # Article rotation — 14-day cycle
+    articles = [
+        ("Florida insurance crisis — what investors should price in", "When you underwrite a buy-and-hold in FL, insurance is no longer a back-of-envelope rounding error..."),
+        ("The 70% rule applied to today's market", "ARV × 0.70 minus repairs — the classic flip math. Let's walk through it on yesterday's first deal..."),
+        ("Top 5 Florida counties by distressed sales velocity", "Our scraper saw the highest off-market volume this week in: Hillsborough, Pinellas, Orange, Broward, Lee..."),
+        ("Save-Our-Homes 2026 changes for investors", "If you're buying long-term holds, the homestead exemption shifts may save you ~$1,200/yr on properties under $500K..."),
+        ("STR markets softening in Miami-Dade", "Short-term rental nightly rates dropped 8-12% YoY across Miami-Dade. Here's how to read the data..."),
+        ("ARV calculation walkthrough — yesterday's deal", "Today we'll work through a real listing from our scrape: address, comps, repair budget, profit projection..."),
+        ("Cap rate in a high-rate environment", "When mortgage rates are 7%, cap rate threshold for a viable buy-and-hold shifts. Here's the math..."),
+        ("1031 exchange timing tricks", "45-day identification + 180-day close. Here's how to stack closings to maximize your timeline..."),
+        ("How wholesalers price assignments", "$5K? $15K? $40K? It depends on these 4 variables. And here's how to spot when an assignment is too rich..."),
+        ("Florida lien search 101", "Before you sign a contract, run these 3 lookups: county clerk, code violations, tax delinquency..."),
+        ("Buy-and-hold zip codes outperforming Florida", "Median rent / median price ratio is the leading indicator. Here are the top 10 from our database..."),
+        ("FHA/VA finisher opportunities", "Cosmetic flips that qualify for FHA/VA financing have a buyer pool 3x larger than cash-only..."),
+        ("Tax assessor vs. real ARV", "Tax assessor values lag market by 2-4 years. Here's how to back into real ARV without paying for an appraisal..."),
+        ("Florida probate calendar + off-market deals", "Probate filings are a 6-9 month leading indicator for off-market deals. Here's how to track them..."),
+    ]
+    # Rotate based on day of year
+    article_idx = (datetime.now().timetuple().tm_yday) % len(articles)
+    article_title, article_blurb = articles[article_idx]
+
     rows_html = []
     for i, d in enumerate(deals, 1):
         price = f"${d['list_price']:,}" if d.get("list_price") else "Inquire"
@@ -161,7 +182,7 @@ def render_html(deals, today_str):
             {f'<div style="color:#555; font-size:14px;">{escape(meta)}</div>' if meta else ''}
             {match_note}
             <div style="margin-top:10px;">
-                <a href="https://cheaphomesfla.com/deals?ref=cc-{today_str}" style="color:#0a66c2; text-decoration:none; font-weight:bold;">View deal details →</a>
+                <a href="https://cheaphomesfla.com/deals?utm_source=cc&utm_medium=email&utm_campaign=daily_deals&utm_content={today_str}_deal_{i}" style="color:#0a66c2; text-decoration:none; font-weight:bold;">View deal details →</a>
             </div>
         </td></tr>
         """)
@@ -185,12 +206,19 @@ def render_html(deals, today_str):
         {''.join(rows_html)}
     </table>
 
+    <div style="margin:30px 0; padding:22px; background:#fffaf0; border-left:4px solid #d68a1c; border-radius:4px;">
+        <div style="font-size:12px; color:#888; letter-spacing:1px; text-transform:uppercase; margin-bottom:6px;">Today's Investor Read</div>
+        <h3 style="margin:0 0 12px; font-size:19px; color:#222;">{escape(article_title)}</h3>
+        <p style="margin:0 0 14px; font-size:15px; line-height:1.6; color:#333;">{escape(article_blurb)}</p>
+        <a href="https://cheaphomesfla.com/articles/{today_str}?utm_source=cc&utm_medium=email&utm_campaign=daily_deals&utm_content={today_str}_article" style="color:#0a66c2; text-decoration:none; font-weight:bold; font-size:14px;">Read full article →</a>
+    </div>
+
     <div style="margin:30px 0; padding:20px; background:#f5f9ff; border-left:4px solid #0a66c2;">
         <strong style="font-size:16px;">Investor Toolkit (Free):</strong>
         <ul style="margin:10px 0 0 20px; padding:0; font-size:14px; line-height:1.7;">
-            <li><a href="https://cheaphomesfla.com/tools/comp-lookup?ref=cc" style="color:#0a66c2;">Comp Houses Lookup Tool</a> — pull recent sold comps for any address</li>
-            <li><a href="https://cheaphomesfla.com/tools/flip-calc?ref=cc" style="color:#0a66c2;">Fix-and-Flip Profit Calculator</a></li>
-            <li><a href="https://cheaphomesfla.com/tools/rental-calc?ref=cc" style="color:#0a66c2;">Rental Cash-Flow Calculator</a></li>
+            <li><a href="https://cheaphomesfla.com/tools/comp-lookup?utm_source=cc&utm_medium=email&utm_campaign=daily_deals&utm_content={today_str}_comp" style="color:#0a66c2;">Comp Houses Lookup Tool</a> — pull recent sold comps for any address</li>
+            <li><a href="https://cheaphomesfla.com/tools/flip-calc?utm_source=cc&utm_medium=email&utm_campaign=daily_deals&utm_content={today_str}_flip" style="color:#0a66c2;">Fix-and-Flip Profit Calculator</a></li>
+            <li><a href="https://cheaphomesfla.com/tools/rental-calc?utm_source=cc&utm_medium=email&utm_campaign=daily_deals&utm_content={today_str}_rental" style="color:#0a66c2;">Rental Cash-Flow Calculator</a></li>
         </ul>
     </div>
 

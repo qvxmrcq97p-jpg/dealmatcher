@@ -260,6 +260,36 @@ The data above isn't just for matching deals — it's for marketing to BOTH side
 
 ---
 
+## 🌍 GEO-LINKED ARTICLES (NEW — SEO leverage for johnsonbuys.com)
+
+**Concept:** every CC daily email's article links back to a geo-specific page on `johnsonbuys.com` (or related Johnson Buys domains). Drives traffic + signal to the existing 234-page SEO engine.
+
+**Implementation pattern:**
+
+Each article includes city/zip-specific data → article lives at `johnsonbuys.com/articles/<topic>/<city>` (or `/<county>`). Examples:
+
+- "Insurance crisis" article → links to `johnsonbuys.com/articles/insurance/miami-dade`, `/articles/insurance/hillsborough`, etc. — 67 county pages × 14 articles = ~940 unique landing pages
+- "STR markets softening" → only links to coastal counties (Miami-Dade, Broward, Pinellas)
+- "Probate calendar" → links to per-county probate clerk pages
+
+**Why this works:**
+- Each CC email send drives 100-500 visitors to the same URL → strong RANK signal for that page
+- Geo-specific pages outrank generic ones for "insurance Miami-Dade investor"
+- 14 articles × 67 counties = 938 evergreen landing pages indexed
+- Internal links from articles to other Johnson Buys content (fix-and-flip calc, etc.) compound authority
+
+**Build steps:**
+- [ ] Wire article URLs in `build_daily_cc_email.py` to use geo-specific destinations based on top deals' counties that day
+- [ ] Build geo article template in johnsonbuys.com's SEO engine (probably 1 template, dynamic content per geo)
+- [ ] Set canonical tags + sitemap.xml entries
+- [ ] Add Schema.org markup (BlogPosting + LocalBusiness)
+- [ ] Track per-page traffic + conversions in Google Analytics
+- [ ] After 30 days, see which geo+article combos drive most form fills → scale those
+
+**Time:** ~6-8 hr setup. Then auto-generated content from CC sends.
+
+---
+
 ## NEXT 30 DAYS (medium projects)
 
 - [ ] **Constant Contact → SendGrid migration** — move CC contacts + drip sequences into SG; cut over CC sends

@@ -720,57 +720,85 @@ def _parse_ziplist(val) -> set[str]:
 def deal_matches_buyer(deal: dict, buyer: dict) -> bool:
     """True if this deal fits the buyer's buy-box.
 
-    GEO RULE (updated 4/24/26 per Chris): zip-code ONLY.
-    City-level and county-level matching is too broad — a single city can
-    span price tiers that vary 10×. Buyers are required to provide zip codes
-    in `Buyer_Target_Zips__c`. If a buyer has no zips set, they receive
-    NOTHING (better a silent inbox than a flood of off-target deals).
+    POLICY (updated 5/4/26 per Chris):
+    Firehose-by-default. Buyers without geo criteria filled in Salesforce
+    receive ALL deals (top-of-funnel volume; we'd rather over-serve than
+    miss). Once they provide a zip, county, or city in their buy-box, we
+    switch to filtered mode and only send matching deals.
 
-    City and county fields on Salesforce are still read for classification
-    into the near-miss digest — deals whose zip is NOT in a buyer's target
-    list but whose city IS in their per-county city selection get logged
-    separately so Chris can decide whether to expand that buyer's zips.
-
-    Matching philosophy otherwise: buyer opts into every filter they set.
-    Missing deal fields (unknown price, unknown zip) fail the filter —
-    better to skip than to send an off-target match.
+    Matching layers (applied in order):
+      1. Status — only active buyers (always enforced)
+      2. Has-geo-criteria check — if buyer has NO target_zips AND NO counties
+         AND NO city picks, the deal matches by default (firehose).
+      3. Budget — applies whenever it's set, regardless of geo state. A
+         buyer's stated budget gate is always honored.
+      4. Geo — if any geo criterion is set, the deal must match at least
+         one of: target zip, target county, or per-county city pick.
+      5. Rehab tolerance — if buyer said "No" to rehab, skip gut-rehab.
     """
     f = BUYER_CRITERIA_FIELDS
 
-    # 1. Status — only send to active buyers
+    # ── 1. Status — only send to active buyers ──
     if ACTIVE_BUYER_STATUSES:
         status = buyer.get(f["status"])
         if status and status not in ACTIVE_BUYER_STATUSES:
             return False
 
-    # 2. Budget — parse picklist → numeric ceiling, compare to asking price
+    # ── 3. Budget filter (applies whether or not geo is set) ──
     price = deal.get("asking_price")
     if price is not None:
         ceiling = _parse_budget(buyer.get(f["max_budget"]))
         if ceiling is not None and price > ceiling:
             return False
-    # If price is unknown, we keep the deal moving — let Chris decide via reply.
+    # If price is unknown, keep the deal moving — let Chris decide via reply.
 
-    # 3. Location — strict zip match
+    # ── 2. Has-geo-criteria check ──
     zips = _parse_ziplist(buyer.get(f["target_zips"]))
-    if not zips:
-        # Buyer hasn't provided zip codes yet. Until they do, they match nothing.
-        # The near-miss digest (see classify_near_miss) will flag city/county hits
-        # so Chris can reach out and collect zips from the buyer.
+    counties = _parse_multiselect(buyer.get(f["counties"]))
+    city_picks: list[str] = []
+    for _county, api in COUNTY_CITY_FIELDS.items():
+        city_picks.extend(_parse_multiselect(buyer.get(api)))
+
+    has_geo = bool(zips or counties or city_picks)
+
+    if not has_geo:
+        # Buyer has NO geo criteria filled yet.
+        # Per-buyer scraper email is reserved for criteria-filled buyers.
+        # Unsegmented buyers get the broad CC daily blast instead (1 email/day,
+        # top 10 deals, plus buy-box CTA). This keeps SendGrid volume sane.
+        # When they fill their buy-box, they auto-graduate to per-buyer matching.
         return False
 
-    deal_zip = deal.get("zip")
-    if not deal_zip or deal_zip not in zips:
+    # ── 4. Geo filter (buyer has SOME geo criteria set) ──
+    deal_zip = (deal.get("zip") or "").strip()
+    deal_city = (deal.get("city") or "").strip().lower()
+    deal_county = (deal.get("county") or "").strip()
+
+    geo_match = False
+    if zips and deal_zip and deal_zip in zips:
+        geo_match = True
+    elif counties and deal_county and deal_county in counties:
+        geo_match = True
+    elif city_picks and deal_city:
+        if any(deal_city == c.strip().lower() for c in city_picks):
+            geo_match = True
+
+    if not geo_match:
         return False
 
-    # 4. Rehab tolerance — if buyer said "No" to rehab, skip gut-rehab deals
+    # ── 5. Rehab tolerance ──
+    return _passes_rehab_filter(deal, buyer)
+
+
+def _passes_rehab_filter(deal: dict, buyer: dict) -> bool:
+    """Returns True unless the buyer explicitly said no-rehab and this is gut-rehab."""
+    f = BUYER_CRITERIA_FIELDS
     willing = (buyer.get(f["willing_to_rehab"]) or "").lower()
     condition = (deal.get("condition") or "").lower()
     if willing in ("no", "not willing") and (
         "gut" in condition or "heavy rehab" in condition or "tear down" in condition
     ):
         return False
-
     return True
 
 
