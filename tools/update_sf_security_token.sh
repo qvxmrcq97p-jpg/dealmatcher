@@ -57,6 +57,47 @@ for w in "${WORKERS[@]}"; do
 done
 
 echo ""
+echo "═══ UPDATING TWILIO FUNCTION (johnson-buys-sms) ═══"
+
+# Twilio Function service uses SF auth too — update its env var via API.
+# Service SID + Environment SID are stable; we know them from earlier deploys.
+TW_SID=$(awk -F= '$1=="TWILIO_ACCOUNT_SID" { sub(/^[^=]*=/, ""); print; exit }' "$ENV_FILE")
+TW_TOK=$(awk -F= '$1=="TWILIO_AUTH_TOKEN" { sub(/^[^=]*=/, ""); print; exit }' "$ENV_FILE")
+SVC_SID="ZS99a31d595457ceb712048c13dc3f3b2c"   # johnson-buys-sms
+ENV_SID="ZE52139c82aa57608f8b3e4b233d1a97d4"   # default 'ui' environment
+
+if [ -n "$TW_SID" ] && [ -n "$TW_TOK" ]; then
+    # Find existing variable SID for SF_SECURITY_TOKEN (if it exists, we update; otherwise we POST new)
+    VARS_JSON=$(curl -sS -u "$TW_SID:$TW_TOK" \
+        "https://serverless.twilio.com/v1/Services/$SVC_SID/Environments/$ENV_SID/Variables?PageSize=100" 2>/dev/null)
+    EXISTING_SID=$(echo "$VARS_JSON" | python3 -c "
+import json, sys
+try:
+    d = json.load(sys.stdin)
+    for v in d.get('variables', []):
+        if v.get('key') == 'SF_SECURITY_TOKEN':
+            print(v['sid']); break
+except: pass
+")
+    if [ -n "$EXISTING_SID" ]; then
+        # PATCH existing variable
+        curl -sS -X POST -u "$TW_SID:$TW_TOK" \
+            "https://serverless.twilio.com/v1/Services/$SVC_SID/Environments/$ENV_SID/Variables/$EXISTING_SID" \
+            --data-urlencode "Value=$NEW_TOKEN" > /dev/null
+        echo "✓ Updated SF_SECURITY_TOKEN on Twilio Function (var sid: $EXISTING_SID)"
+    else
+        # Create new variable
+        curl -sS -X POST -u "$TW_SID:$TW_TOK" \
+            "https://serverless.twilio.com/v1/Services/$SVC_SID/Environments/$ENV_SID/Variables" \
+            --data-urlencode "Key=SF_SECURITY_TOKEN" \
+            --data-urlencode "Value=$NEW_TOKEN" > /dev/null
+        echo "✓ Created SF_SECURITY_TOKEN on Twilio Function service"
+    fi
+else
+    echo "! Skipping Twilio Function update (TWILIO_ACCOUNT_SID or TWILIO_AUTH_TOKEN missing in .env)"
+fi
+
+echo ""
 echo "═══ TESTING ═══"
 echo ""
 

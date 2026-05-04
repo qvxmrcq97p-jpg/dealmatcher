@@ -9,15 +9,23 @@ When something errors during the migration or daily ops, find the symptom below 
 ## Pipeline silent failures (May 4, 2026 — incidents we hit during go-live)
 
 ### `INVALID_LOGIN: Invalid username, password, security token; or user locked out` (Salesforce)
-**Cause:** SF security token stale. SF auto-rotates the token whenever you reset your password OR sign in from a new IP. The Cloudflare Worker secrets store the OLD token.
+**Cause:** SF security token stale. SF auto-rotates the token whenever you reset your password OR sign in from a new IP. Token is stored in 5 places that all need updating.
 **Fix:**
 1. Get the current security token: SF → avatar → Settings → My Personal Information → Reset My Security Token (emails new token in 60s) — or copy the latest one if you already have it.
 2. Run on your Mac:
    ```
    cd ~/dealmatcher && bash tools/update_sf_security_token.sh
    ```
-   Paste new token when prompted. Script updates `.env` + all 3 Workers (propertyleads, motivatedsellers, sendgrid-events) + tests SF auth.
+   Paste new token when prompted. Script updates ALL 5 places SF auth lives:
+   - `.env.cheaphomesfla`
+   - Cloudflare Worker `propertyleads-ppl-worker`
+   - Cloudflare Worker `motivatedsellers-ppl-worker`
+   - Cloudflare Worker `sendgrid-events`
+   - **Twilio Function `johnson-buys-sms` (handles cheaphomesFLA.com form fills via /buyer-webhook)**
 3. Verify worker: send a test lead via curl (script prints the command at the end).
+4. Test cheaphomesFLA.com form fill — should see "✓ Salesforce Contact created" in the notification email instead of "pending".
+
+**If you only updated some places:** the symptom shows up as different things failing — Cloudflare workers OR Twilio Functions OR direct SF queries. Always run the update script so all 5 places get refreshed.
 
 ### `SendGrid error 401` from a Cloudflare Worker
 **Cause:** Stale or missing `SENDGRID_API_KEY` in worker secrets.

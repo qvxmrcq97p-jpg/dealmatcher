@@ -1,5 +1,7 @@
 # dealmatcher — Project State
 
+> **New here? Read `START_HERE.md` first.** It's the universal entry point with the right "first message" templates for any scenario (sitting down to work, debugging, building new features).
+
 **Last updated:** 2026-05-03 (Sun) — Cloud migration day
 **Owner:** Christopher Johnson (cbfcalcio5@me.com / cbfcalcio5@gmail.com for Cloudflare)
 **Scope:** Two real-estate businesses sharing infrastructure
