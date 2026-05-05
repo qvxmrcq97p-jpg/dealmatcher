@@ -47,3 +47,4 @@ twilio-functions/node_modules/
 
 # Investor data with real email addresses
 data/*.csv
+*.bak
