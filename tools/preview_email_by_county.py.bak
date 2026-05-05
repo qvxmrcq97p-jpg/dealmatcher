@@ -94,7 +94,7 @@ def _render_property_type_badge(d: dict) -> str:
     pt = (d.get("property_type") or "").strip().lower()
     if not pt:
         # Try to infer from description keywords
-        desc = ((d.get("subject") or "") + " " + (d.get("notes") or "")).lower()
+        desc = (d.get("subject", "") + " " + d.get("notes", "")).lower()
         if "land" in desc or "lot" in desc or "vacant" in desc:
             pt = "Land"
         elif "duplex" in desc:
@@ -345,11 +345,8 @@ def main():
                     <div style="font-size:13px; color:#666; margin:2px 0;">{city}{', ' + state if city else state} {zip_code}</div>
                     {_render_property_type_badge(d)}
                     <div style="font-size:22px; color:#0a7c2f; margin:8px 0; font-weight:bold;">${price:,}</div>
-                    <div style="margin-top:14px;">
-                      <a href="https://agents.swipepages.com/conversation/69e697203bf9cc97303c2a09?utm_source=cc&utm_medium=email&utm_campaign=daily_deals&utm_content={today_str}_deal_{i}&utm_term={escape(c.split()[0]).lower()}&deal_id={escape(d.get('_dedup_key', '')[:40])}&deal_address={escape(addr.replace(' ', '+')[:80])}&deal_zip={escape(zip_code)}&deal_county={escape(c.replace(' ', '+'))}"
-                         style="display:inline-block; padding:11px 20px; background:linear-gradient(135deg,#0a7c2f,#0a66c2); color:#fff; text-decoration:none; border-radius:8px; font-size:14px; font-weight:bold; box-shadow:0 2px 6px rgba(10,124,47,0.25);">
-                        Send me full details + photos →
-                      </a>
+                    <div style="margin-top:12px;">
+                      <a href="mailto:info@cheaphomesfla.com?subject=I%27m%20interested%20in%20%23{i}%20{escape(c.replace(' ', '%20'))}%20-%20{escape(addr.replace(' ', '%20')[:60])}&body=Hi%20Chris%2C%0A%0AI%27m%20interested%20in%20deal%20%23{i}%20in%20{escape(c.replace(' ', '%20'))}%20County%20-%20{escape(addr.replace(' ', '%20')[:60])}.%0A%0APlease%20send%20me%20more%20details%20%2B%20photos.%0A%0AMy%20info%3A%0AName%3A%0APhone%3A%0AEntity%3A%0A%0AThanks%21" style="display:inline-block; padding:10px 18px; background:#0a7c2f; color:#fff; text-decoration:none; border-radius:6px; font-size:14px; font-weight:bold;">📨 I want full details on this</a>
                     </div>
                   </td>
                 </tr>
