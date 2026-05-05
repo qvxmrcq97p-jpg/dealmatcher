@@ -135,25 +135,44 @@ async function sfLogin(context) {
 
 
 async function sfFindLeadByPhone(sf, fromNumber) {
-    const phone = (fromNumber || '').replace(/[^\d]/g, '');
-    if (phone.length < 10) return null;
-    const last10 = phone.slice(-10);
-    // SOQL — match against any of the 4 phone fields, last 10 digits
+    // PHONE LOOKUP — robust to all SF phone formats.
+    //
+    // OLD (broken): SOQL `LIKE '%7863012767%'` only matched if the field had
+    // 10 consecutive digits with NO separators. SF stores phones as
+    // "(786) 301-2767" or "786-301-2767" or "+1 786 301 2767", which all
+    // contain the same 10 digits but with parens/dashes/spaces in the middle.
+    // Result: legitimate leads in SF showed as "unknown caller no SF lead match."
+    //
+    // NEW: query for last-4-digits (catches every format), then post-filter
+    // by normalizing each candidate's phone fields to digits-only and matching
+    // the last 10. Limit 50 results — collisions on last-4 are rare and bounded.
+    const phoneDigits = (fromNumber || '').replace(/[^\d]/g, '');
+    if (phoneDigits.length < 10) return null;
+    const last10 = phoneDigits.slice(-10);
+    const last4 = last10.slice(-4);
+
     const soql =
         `SELECT Id, FirstName, LastName, Phone, MobilePhone, Phone2__c, ` +
         `Property_Address__c, Status, SMS_Opt_Out__c FROM Lead ` +
-        `WHERE Phone LIKE '%${last10}%' OR MobilePhone LIKE '%${last10}%' ` +
-        `OR Phone2__c LIKE '%${last10}%' LIMIT 1`;
+        `WHERE Phone LIKE '%${last4}%' OR MobilePhone LIKE '%${last4}%' ` +
+        `OR Phone2__c LIKE '%${last4}%' LIMIT 50`;
     const url = `${sf.instance}/services/data/v58.0/query?q=${encodeURIComponent(soql)}`;
     const resp = await fetch(url, {
         headers: { 'Authorization': `Bearer ${sf.sessionId}` }
     });
     if (!resp.ok) return null;
     const data = await resp.json();
-    if (data.records && data.records.length > 0) {
-        const r = data.records[0];
-        delete r.attributes;
-        return r;
+    if (!data.records || data.records.length === 0) return null;
+
+    // Post-filter: find the record whose normalized phone matches last10
+    const normalize = (s) => (s || '').replace(/[^\d]/g, '').slice(-10);
+    for (const r of data.records) {
+        if (normalize(r.Phone) === last10 ||
+            normalize(r.MobilePhone) === last10 ||
+            normalize(r.Phone2__c) === last10) {
+            delete r.attributes;
+            return r;
+        }
     }
     return null;
 }

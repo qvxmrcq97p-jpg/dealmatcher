@@ -6,6 +6,22 @@ When something errors during the migration or daily ops, find the symptom below 
 
 ---
 
+## Pipeline silent failures (May 5, 2026)
+
+### Inbound SMS shows "unknown caller no SF lead match" but the person IS in SF
+**Cause:** The Twilio Function `sms_v2.js` `sfFindLeadByPhone()` was using SOQL `LIKE '%${last10digits}%'` — only matched when the field contained the 10 digits CONSECUTIVELY with no separators. Salesforce stores phones with separators (`(786) 301-2767`, `786-301-2767`, `+1 786 301 2767`). All those contain the right 10 digits but with parens/dashes/spaces interrupting → no match.
+
+**Fix:** changed query to match on LAST 4 DIGITS via SOQL LIKE, then post-filter in JS by normalizing each candidate's phone fields to digits-only and matching the full last 10.
+
+**Apply if reverted:** the patched function is in `~/dealmatcher/twilio-functions/sms_v2.js`. Re-deploy with:
+```bash
+cd ~/dealmatcher && python3 tools/deploy_twilio_sms.py
+```
+
+**Verify after deploy:** in Twilio Functions logs, look for "SF Lead matched: 00Q..." on next inbound SMS that should match.
+
+---
+
 ## Pipeline silent failures (May 4, 2026 — incidents we hit during go-live)
 
 ### `INVALID_LOGIN: Invalid username, password, security token; or user locked out` (Salesforce)
