@@ -131,12 +131,18 @@ WORKERS = {
         "timestamp_field": "last_message_at",
         "stale_after_hours": 6,  # 30 groups should produce constant flow
         "required_bindings": ["shared_secret"],
+        # Disabled 2026-05-12 per Chris — WhatsApp deal-forwarder turned off
+        # (volume untenable). Green-API webhook URL unset in console, worker
+        # still deployed but receiving nothing. Remove "disabled" to re-enable.
+        "disabled": True,
     },
 }
 
 
 def check_workers(failures, env):
     for name, cfg in WORKERS.items():
+        if cfg.get("disabled"):
+            continue
         try:
             data = http_get_json(cfg["url"])
         except Exception as e:

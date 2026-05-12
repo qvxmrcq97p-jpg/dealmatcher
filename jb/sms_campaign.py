@@ -21,9 +21,26 @@ if datetime.date.today().weekday() == 6:  # 6 = Sunday
     print(f"[{datetime.date.today()}] Sunday — skipping SMS campaign. Runs Mon-Sat.")
     sys.exit(0)
 
-# ─── Credentials ──────────────────────────────────────────────────────────────
 # ─── Credentials (env vars in cloud, .env file in local dev) ────────────
 import os
+from pathlib import Path
+
+# Auto-load .env.cheaphomesfla from repo root if present. Works whether
+# python-dotenv is installed or not. Robust to unquoted values that would
+# break a shell `source` (e.g. .env line-29 with stray `xsmn` token).
+_ENV_PATH = Path(__file__).resolve().parent.parent / ".env.cheaphomesfla"
+if _ENV_PATH.exists():
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(_ENV_PATH)
+    except ImportError:
+        for _line in _ENV_PATH.read_text().splitlines():
+            _s = _line.strip()
+            if not _s or _s.startswith("#") or "=" not in _s:
+                continue
+            _k, _v = _s.split("=", 1)
+            os.environ.setdefault(_k.strip(), _v.strip().strip('"').strip("'"))
+
 SF_USERNAME       = os.environ["SF_USERNAME"]
 SF_PASSWORD       = os.environ["SF_PASSWORD"]
 SF_SECURITY_TOKEN = os.environ["SF_SECURITY_TOKEN"]
