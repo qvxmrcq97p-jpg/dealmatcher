@@ -1,0 +1,123 @@
+name: Daily CHF Morning Blast
+
+# Runs the full pipeline: scrape → build broadcast HTML → SendGrid
+# personalized track (per-investor) → optional CC broadcast push.
+#
+# Schedule: Mon-Fri at 9:30 AM ET (= 13:30 UTC during EDT, 14:30 UTC during EST).
+# We use BOTH cron expressions so the run lands at 9:30 AM ET year-round.
+# GitHub Actions skips duplicates because only one will fire on any given day
+# (DST shifts which of the two is "9:30 AM ET").
+#
+# Why 9:30 ET (changed from 9:00 ET on 2026-05-13):
+#   Inbox audit across recent weekdays showed the morning wholesaler-email
+#   batch consistently wraps by ~8:30 ET (today's batch landed 07:50-08:03).
+#   Scraping at 9:30 ET captures the full morning batch with ~60 min of
+#   headroom before any wholesaler-side timing variance. Anything that
+#   arrives after 9:30 is caught by the afternoon launchd scrapes and
+#   appears in the next morning's blast — correct cadence for a daily product.
+#
+# Manual trigger via "Run workflow" button on the Actions tab — supports
+# dry-run for safe iteration before flipping to --send.
+on:
+  schedule:
+    - cron: "30 13 * * 1-5"   # 9:30 AM EDT (UTC-4)
+    - cron: "30 14 * * 1-5"   # 9:30 AM EST (UTC-5)
+  workflow_dispatch:
+    inputs:
+      send_mode:
+        description: "live = actually send, dry = build + log only"
+        required: true
+        default: "dry"
+        type: choice
+        options:
+          - dry
+          - live
+      skip_scrape:
+        description: "Use existing deals JSON instead of re-scraping"
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  morning_blast:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          # Belt-and-suspenders: explicit deps used by the runner
+          pip install simple-salesforce msal requests beautifulsoup4 lxml
+
+      - name: Determine send mode
+        id: mode
+        run: |
+          # workflow_dispatch override wins; otherwise scheduled = live
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "live=${{ inputs.send_mode == 'live' && 'true' || 'false' }}" >> "$GITHUB_OUTPUT"
+            echo "skip_scrape=${{ inputs.skip_scrape }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "live=true" >> "$GITHUB_OUTPUT"
+            echo "skip_scrape=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run cloud_morning_runner
+        env:
+          # Microsoft 365 / Graph
+          GRAPH_CLIENT_ID:        ${{ secrets.GRAPH_CLIENT_ID }}
+          GRAPH_TENANT_ID:        ${{ secrets.GRAPH_TENANT_ID }}
+          GRAPH_USER_EMAIL:       ${{ secrets.GRAPH_USER_EMAIL }}
+          GRAPH_TOKEN_CACHE_B64:  ${{ secrets.GRAPH_TOKEN_CACHE_B64 }}
+          # Salesforce (per-investor blast queries Contacts here)
+          SF_USERNAME:            ${{ secrets.SF_USERNAME }}
+          SF_PASSWORD:            ${{ secrets.SF_PASSWORD }}
+          SF_SECURITY_TOKEN:      ${{ secrets.SF_SECURITY_TOKEN }}
+          # SendGrid (personalized blast + Field Reports)
+          SENDGRID_API_KEY:       ${{ secrets.SENDGRID_API_KEY }}
+          # Constant Contact (optional — if not set, broadcast remains manual)
+          CC_ACCESS_TOKEN:        ${{ secrets.CC_ACCESS_TOKEN }}
+          CC_REFRESH_TOKEN:       ${{ secrets.CC_REFRESH_TOKEN }}
+          CC_API_KEY:             ${{ secrets.CC_API_KEY }}
+          CC_LIST_ID:             ${{ secrets.CC_LIST_ID }}
+          # Notification (optional)
+          ALERT_WEBHOOK_URL:      ${{ secrets.ALERT_WEBHOOK_URL }}
+          # Tell the runner where to write its scratch files
+          DATA_DIR:               ${{ github.workspace }}/run_data
+        run: |
+          mkdir -p "$DATA_DIR"
+          ARGS=""
+          if [ "${{ steps.mode.outputs.live }}" = "true" ]; then
+            ARGS="$ARGS --send"
+          fi
+          if [ "${{ steps.mode.outputs.skip_scrape }}" = "true" ]; then
+            ARGS="$ARGS --skip-scrape"
+          fi
+          echo "Running: python tools/cloud_morning_runner.py $ARGS"
+          python tools/cloud_morning_runner.py $ARGS
+
+      - name: Upload run artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: morning-blast-${{ github.run_id }}
+          path: |
+            run_data/cc_email_*.html
+            run_data/cloud_morning_run_*.json
+            run_data/personalized_send_*.json
+          retention-days: 14
+
+      - name: Summary on failure
+        if: failure()
+        run: |
+          echo "::error::Morning blast failed. Check the artifacts + logs."
+          # If a webhook is configured, the runner already posted a failure
+          # summary to it from inside the script.
