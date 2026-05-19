@@ -1111,6 +1111,26 @@ def main() -> None:
             log.info("  near-miss → %s: %d deal(s) in same city/county, different zip",
                      name, count)
 
+    # 4b. Bucket B — Constant Contact statewide blast (locked R24-API 2026-05-19).
+    # Runs after Bucket A SendGrid so per-investor briefs go first. Dedups
+    # Bucket A buyers off the CC master list to prevent double-email, then
+    # creates a CC v3 campaign and (if CC_AUTO_SEND=true) sends it.
+    # Failures here are logged but don't crash the run — Bucket A already shipped.
+    if not DRY_RUN:
+        try:
+            from tools.cc_blast_pipeline import run as _cc_run
+            buyer_emails = [b.get("Email") for b in buyers if b.get("Email")]
+            bucket_b = _cc_run(all_deals, buyer_emails)
+            log.info("Bucket B pipeline result: %s",
+                     {k: v for k, v in bucket_b.items() if k != "campaign"})
+            if bucket_b.get("campaign", {}).get("campaign_id"):
+                log.info("Bucket B campaign_id: %s (auto_send=%s)",
+                         bucket_b["campaign"]["campaign_id"], bucket_b.get("auto_send"))
+        except Exception as e:  # noqa: BLE001
+            log.error("Bucket B pipeline crashed (Bucket A already shipped): %s", e)
+    else:
+        log.info("DRY_RUN — skipping Bucket B")
+
     # 5. State
     state["last_run_iso"] = start_ts.isoformat()
     save_state(state)
