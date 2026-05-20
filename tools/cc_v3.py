@@ -51,8 +51,49 @@ API_BASE  = "https://api.cc.email/v3"
 # Token refresh
 # ---------------------------------------------------------------------------
 
+def _save_rotated_refresh_token(new_refresh: str) -> None:
+    """Persist a rotated refresh token to ~/dealmatcher/.env.cheaphomesfla AND
+    ~/Desktop/.env.cheaphomesfla so the next run doesn't try the dead old token.
+
+    CC's OAuth server returns a NEW refresh_token with every refresh response
+    when the app is configured for Rotating Refresh Tokens. We thought we'd
+    set Long-Lived but the API behaviour proves otherwise. So we save the new
+    one defensively after every successful refresh.
+    """
+    import re as _re
+    from pathlib import Path as _Path
+    candidates = [
+        _Path.home() / "dealmatcher" / ".env.cheaphomesfla",
+        _Path.home() / "Desktop" / ".env.cheaphomesfla",
+    ]
+    for p in candidates:
+        if not p.exists():
+            continue
+        try:
+            content = p.read_text()
+            if _re.search(r"^CC_REFRESH_TOKEN=", content, flags=_re.MULTILINE):
+                content = _re.sub(r"^CC_REFRESH_TOKEN=.*$", f"CC_REFRESH_TOKEN={new_refresh}", content, flags=_re.MULTILINE)
+            else:
+                if content and not content.endswith("\n"):
+                    content += "\n"
+                content += f"CC_REFRESH_TOKEN={new_refresh}\n"
+            p.write_text(content)
+            log.info("CC: persisted rotated refresh_token to %s", p)
+        except Exception as e:  # noqa: BLE001
+            log.warning("CC: could not write rotated refresh_token to %s: %s", p, e)
+    # Also update in-process env so subsequent calls in the same run use the new one
+    os.environ["CC_REFRESH_TOKEN"] = new_refresh
+
+
 def refresh_access_token() -> str:
-    """Exchange CC_REFRESH_TOKEN for a fresh access_token. Returns just the token string."""
+    """Exchange CC_REFRESH_TOKEN for a fresh access_token. Returns just the token string.
+
+    Saves any rotated refresh_token back to the .env files so the next run
+    uses the latest value. CC's OAuth server rotates refresh tokens by default
+    even when the app is marked "Long-Lived" — we discovered this the hard way
+    on 2026-05-19 when Bucket B failed with HTTP 400 on the second refresh in
+    a single scraper run.
+    """
     client_id     = os.environ["CC_CLIENT_ID"]
     client_secret = os.environ["CC_CLIENT_SECRET"]
     refresh_token = os.environ["CC_REFRESH_TOKEN"]
@@ -71,11 +112,23 @@ def refresh_access_token() -> str:
             "Accept":        "application/json",
         },
     )
-    with urllib.request.urlopen(req, timeout=20) as r:
-        payload = json.loads(r.read().decode("utf-8"))
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r:
+            payload = json.loads(r.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        body_text = e.read().decode("utf-8", errors="replace")
+        log.error("CC token refresh HTTP %d: %s", e.code, body_text)
+        raise RuntimeError(f"CC token refresh failed: HTTP {e.code} — {body_text}")
+
     tok = payload.get("access_token")
     if not tok:
         raise RuntimeError(f"No access_token in refresh response: {payload}")
+
+    # CC rotates the refresh token — save the new one
+    new_refresh = payload.get("refresh_token")
+    if new_refresh and new_refresh != refresh_token:
+        _save_rotated_refresh_token(new_refresh)
+
     log.info("CC: refreshed access_token (expires in %s s)", payload.get("expires_in", "?"))
     return tok
 
@@ -123,43 +176,46 @@ def create_email_campaign(token: str, name: str, subject: str, html: str,
                           from_name: str, from_email: str,
                           reply_to_email: str | None = None,
                           preheader: str = "",
+                          contact_list_ids: list[str] | None = None,
                           physical_address_in_footer: dict | None = None) -> dict:
     """Create a v3 email campaign (CustomCodeCampaignV3 shape) as a draft.
 
     Returns the campaign object (incl. campaign_id and campaign_activities).
 
-    CC's CustomCodeCampaignV3 spec requires:
-      - name (campaign name, internal)
-      - email_campaign_activities: list with one CustomCodeCampaignActivityV3:
-          - format_type: 5 (Custom Code)
-          - from_name, from_email, reply_to_email
-          - subject, preheader (preview text)
-          - html_content
-          - physical_address_in_footer: { address_line1, city, state, postal_code, country_code }
+    CC's CustomCodeCampaignV3 spec accepts on the embedded activity:
+      - format_type: 5 (Custom Code)
+      - from_name, from_email, reply_to_email
+      - subject, preheader (preview text)
+      - html_content
+      - physical_address_in_footer
+      - contact_list_ids (audience set inline — preferred over separate PUT
+        which loses from_email since CC's PUT requires the full activity body)
     """
-    body = {
-        "name": name,
-        "email_campaign_activities": [{
-            "format_type":   5,           # 5 = Custom Code
-            "from_name":     from_name,
-            "from_email":    from_email,
-            "reply_to_email": reply_to_email or from_email,
-            "subject":       subject,
-            "preheader":     preheader,
-            "html_content":  html,
-            "physical_address_in_footer": physical_address_in_footer or {
-                "address_line1": "PO Box 970307",
-                "city":          "Coconut Creek",
-                "state_code":    "FL",
-                "postal_code":   "33097",
-                "country_code":  "US",
-            },
-        }],
+    activity = {
+        "format_type":   5,           # 5 = Custom Code
+        "from_name":     from_name,
+        "from_email":    from_email,
+        "reply_to_email": reply_to_email or from_email,
+        "subject":       subject,
+        "preheader":     preheader,
+        "html_content":  html,
+        "physical_address_in_footer": physical_address_in_footer or {
+            "address_line1": "PO Box 970307",
+            "city":          "Coconut Creek",
+            "state_code":    "FL",
+            "postal_code":   "33097",
+            "country_code":  "US",
+        },
     }
+    if contact_list_ids:
+        activity["contact_list_ids"] = contact_list_ids
+
+    body = {"name": name, "email_campaign_activities": [activity]}
     status, resp = _http("POST", "/emails", token, body=body)
     if status >= 400:
         raise RuntimeError(f"CC create_email_campaign {status}: {resp}")
-    log.info("CC: created campaign '%s' (status %d)", name, status)
+    log.info("CC: created campaign '%s' (status %d) with %d list(s)",
+             name, status, len(contact_list_ids or []))
     return resp
 
 
@@ -173,9 +229,34 @@ def get_primary_activity_id(campaign: dict) -> str | None:
 
 
 def associate_activity_with_list(token: str, activity_id: str, list_id: str) -> dict:
-    """Associate a campaign activity with a contact list (audience)."""
-    # PUT /emails/activities/{activity_id} — partial update with contact_list_ids
-    body = {"contact_list_ids": [list_id]}
+    """Associate a campaign activity with a contact list (audience).
+
+    CC's PUT /emails/activities/{id} requires the FULL CustomCodeCampaignActivityV3
+    body — partial updates fail with 'From Email is null' / 'Subject is null' /
+    etc. So we GET the current activity, merge in contact_list_ids, then PUT
+    the full object back.
+    """
+    # Fetch current activity state
+    status, current = _http("GET", f"/emails/activities/{activity_id}", token)
+    if status >= 400:
+        raise RuntimeError(f"CC get_activity {status}: {current}")
+
+    # Build full update body. CC's PUT spec requires these top-level fields
+    # on a CustomCode activity (format_type=5). Merge in contact_list_ids.
+    body = {
+        "format_type":   current.get("format_type", 5),
+        "from_name":     current.get("from_name"),
+        "from_email":    current.get("from_email"),
+        "reply_to_email": current.get("reply_to_email"),
+        "subject":       current.get("subject"),
+        "preheader":     current.get("preheader", ""),
+        "html_content":  current.get("html_content"),
+        "physical_address_in_footer": current.get("physical_address_in_footer"),
+        "contact_list_ids": [list_id],
+    }
+    # Strip None values that CC might reject
+    body = {k: v for k, v in body.items() if v is not None}
+
     status, resp = _http("PUT", f"/emails/activities/{activity_id}", token, body=body)
     if status >= 400:
         raise RuntimeError(f"CC associate_list {status}: {resp}")
@@ -199,7 +280,7 @@ def schedule_send_now(token: str, activity_id: str) -> dict:
 
 def send_bucket_b(html: str, subject: str, list_id: str,
                   from_name: str = "Christopher Johnson",
-                  from_email: str = "info-cheaphomesfla.com@shared1.ccsend.com",
+                  from_email: str = "info@cheaphomesfla.com",
                   reply_to_email: str = "info@cheaphomesfla.com",
                   campaign_name: str | None = None,
                   preheader: str = "",
@@ -212,9 +293,18 @@ def send_bucket_b(html: str, subject: str, list_id: str,
     """
     token = refresh_access_token()
     if campaign_name is None:
-        today = dt.date.today().isoformat()
-        campaign_name = f"CheapHomesFLA Daily Brief — {today}"
+        # Include HH:MM:SS so retries during the same day don't collide with
+        # CC's "Email Campaign Name is not unique" 409 error. Each retry
+        # gets a unique name; the LATEST one wins as the canonical send.
+        now = dt.datetime.now()
+        campaign_name = f"CheapHomesFLA Daily Brief — {now.strftime('%Y-%m-%d %H:%M:%S')}"
 
+    # Two-step: create campaign, then PUT activity with full body + list_ids.
+    # Inline contact_list_ids in the create payload is silently ignored by
+    # CC (discovered 2026-05-19 evening — schedule fails with 'no contact
+    # list' even though we set it inline). The PUT must include the full
+    # activity body or CC returns 'From Email is null'. associate_activity_with_list
+    # now does GET→merge→PUT to handle this correctly.
     campaign = create_email_campaign(
         token, campaign_name, subject, html,
         from_name=from_name, from_email=from_email,

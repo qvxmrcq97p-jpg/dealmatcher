@@ -1172,10 +1172,13 @@ def county_from_zip(zip_str: Optional[str]) -> Optional[str]:
         return None
     if n < 32000 or n > 34999:
         return None
-    # South FL tri-county
-    if 33010 <= n <= 33199: return "Miami-Dade"
-    if 33301 <= n <= 33359: return "Broward"
+    # South FL tri-county — ORDER MATTERS (Broward 33060-33099 must precede
+    # the Miami-Dade range or Pompano/Lighthouse Point/Deerfield zips fall
+    # into Miami-Dade by mistake — caught 2026-05-19 by Chris in CC draft).
     if 33060 <= n <= 33099: return "Broward"
+    if 33301 <= n <= 33359: return "Broward"
+    if 33010 <= n <= 33059: return "Miami-Dade"
+    if 33100 <= n <= 33199: return "Miami-Dade"
     if 33401 <= n <= 33499: return "Palm Beach"
     # Treasure Coast
     if 34945 <= n <= 34988: return "St. Lucie"
@@ -1876,7 +1879,7 @@ def _rank_deals_for_feature(deals_in: List["Deal"]) -> List["Deal"]:
     return sorted(deals_in, key=key)
 
 
-def build_cc_statewide(deals: List["Deal"], top_per_county: int = 3) -> Tuple[str, str]:
+def build_cc_statewide(deals: List["Deal"], top_per_county: int = 4, max_spotlights: int = 5) -> Tuple[str, str]:
     """Render the CC statewide brief (Bucket B) — same v4 design language as
     per-buyer briefs but scoped to ALL deals (no R16 filter, no per-buyer geo).
 
@@ -1901,7 +1904,11 @@ def build_cc_statewide(deals: List["Deal"], top_per_county: int = 3) -> Tuple[st
     date_short = datetime.now().strftime('%b %-d' if sys.platform != 'win32' else '%b %#d')
     n_deals = len(deals)
 
-    # Group deals by county
+    # Group deals by county. Deals without a county (zip is null OR not
+    # recognized) bucket under "Other Florida" — these NEVER get a spotlight
+    # (per Chris 2026-05-19 R25-CONTENT). They're tracked for the stat count
+    # only and surface in the bottom 23-county grid only if/when their zip
+    # is fixed in the parser.
     by_county: Dict[str, List["Deal"]] = {}
     for d in deals:
         if not d.county and d.zip_code:
@@ -1909,8 +1916,14 @@ def build_cc_statewide(deals: List["Deal"], top_per_county: int = 3) -> Tuple[st
         key = d.county or "Other Florida"
         by_county.setdefault(key, []).append(d)
 
-    # Order spotlights by deal count desc; if tie, alphabetical
-    county_order = sorted(by_county.keys(), key=lambda c: (-len(by_county[c]), c))
+    # Spotlight selection — top N counties by deal count desc, EXCLUDING
+    # "Other Florida" and excluding any zip-only key. If tie, alphabetical.
+    # Per Chris 2026-05-19 R25-CONTENT: keep email tight (4-5 spotlights x
+    # 3-4 properties each); remaining counties appear in the bottom grid.
+    SPOTLIGHT_EXCLUDE = {"Other Florida", "Unknown", ""}
+    eligible = [c for c in by_county if c not in SPOTLIGHT_EXCLUDE and by_county[c]]
+    county_order_all = sorted(eligible, key=lambda c: (-len(by_county[c]), c))
+    county_order = county_order_all[:max_spotlights]
     total_spotlights = len(county_order)
 
     # Subject
@@ -2207,7 +2220,7 @@ def build_cc_statewide(deals: List["Deal"], top_per_county: int = 3) -> Tuple[st
 
       <tr><td class="px-mobile" style="padding:24px 32px 4px 32px;">
         <p style="font-family:Georgia,serif;font-size:15px;line-height:1.55;color:#1a1a1a;margin:0;">
-          <strong>Today's statewide brief:</strong> {n_deals} below-market opportunities across {total_spotlights} Florida counties, sourced from our 26-wholesaler network and the WhatsApp off-market pipeline. Below: every active deal, grouped by county. At the bottom: links to every Florida county we cover for buyers who want to widen the lens.
+          <strong>Today's statewide brief:</strong> {n_deals} below-market opportunities across {total_spotlights} Florida counties. Below: every active deal, grouped by county. At the bottom: links to every Florida county we cover for buyers who want to widen the lens.
         </p>
         <p style="font-family:Georgia,serif;font-size:14px;line-height:1.55;color:#555;margin:12px 0 0 0;font-style:italic;">
           Want a brief filtered to only your counties + zips instead of statewide? <a href="https://www.cheaphomesfla.com/?utm_source=cc&utm_campaign=buybox" style="color:#0a66c2;font-style:normal;">Set your buy-box →</a> Takes 60 seconds, runs daily after that.
@@ -2219,7 +2232,7 @@ def build_cc_statewide(deals: List["Deal"], top_per_county: int = 3) -> Tuple[st
       <tr><td class="px-mobile" style="padding:40px 32px 12px 32px;border-top:1px solid #1a1a1a;">
         <div style="font-family:'Courier New',monospace;font-size:10px;letter-spacing:2px;color:#1a1a1a;text-transform:uppercase;margin-bottom:12px;">Active across the rest of Florida</div>
         <p style="font-family:Georgia,serif;font-size:14px;line-height:1.55;color:#1a1a1a;margin:0 0 14px 0;">
-          Click any county to see what's live there today. Inventory updates daily from our 26-wholesaler network.
+          Click any county to see what's live there today. Inventory updates daily.
         </p>
         <div>{county_grid_html}</div>
       </td></tr>

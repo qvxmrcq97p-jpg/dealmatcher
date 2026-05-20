@@ -76,6 +76,10 @@ def deals_from_scraper_payload(payload: list[dict]) -> list:
     out = []
     for d in payload:
         out.append(dm.Deal(
+            source_wholesaler = d.get("wholesaler_name") or "",
+            source_email      = d.get("wholesaler_email") or "",
+            source_message_id = d.get("email_id") or "",
+            source_subject    = d.get("subject") or "",
             address    = d.get("property_address") or "",
             city       = d.get("city"),
             state      = (d.get("state") or "FL"),
@@ -86,12 +90,7 @@ def deals_from_scraper_payload(payload: list[dict]) -> list:
             beds       = d.get("beds"),
             baths      = d.get("baths"),
             sqft       = _to_int(d.get("sqft")),
-            property_type = d.get("property_type"),
             condition  = d.get("condition"),
-            source_wholesaler = d.get("wholesaler_name"),
-            source_email      = d.get("wholesaler_email"),
-            source_subject    = d.get("subject"),
-            source_message_id = d.get("email_id"),
             parse_confidence  = "auto",
             raw_text_excerpt  = (d.get("notes") or "")[:240],
         ))

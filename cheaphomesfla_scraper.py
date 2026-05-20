@@ -668,9 +668,13 @@ def load_buyers(sf) -> list[dict]:
     if missing:
         log.warning("Skipping Contact fields not in this org's schema: %s", ", ".join(missing))
 
+    # R9 (locked 2026-05-19): broadened LeadSource to 3 values so all
+    # historical opt-in pathways resolve into Bucket A audience. Was
+    # single-valued ('CheapHomesFLA_LandingPage') which missed buyers
+    # imported under VIP_Signup or the legacy 'Cheap Homes FL - Buyer'.
     soql = (
         f"SELECT {','.join(field_list)} FROM Contact "
-        f"WHERE LeadSource = 'CheapHomesFLA_LandingPage' "
+        f"WHERE LeadSource IN ('CheapHomesFLA_VIP_Signup', 'CheapHomesFLA_LandingPage', 'Cheap Homes FL - Buyer') "
         f"AND Email != null AND HasOptedOutOfEmail = false"
     )
     return sf.query_all(soql)["records"]
@@ -841,23 +845,57 @@ def classify_near_miss(deal: dict, buyer: dict) -> str | None:
 # =============================================================================
 
 def render_email_html(buyer: dict, deals: list[dict]) -> tuple[str, str]:
-    """Render the buyer-facing email HTML.
+    """Render the buyer-facing email HTML using the v4 brief template
+    (Georgia serif + Courier mono + dark stat strip + county spotlights +
+    "Did You Know?" commentary + per-county data summaries + 23-county
+    grid at bottom + mobile responsive).
 
-    v2 (2026-04-30): delegates to render_per_buyer_email.build_email which
-    is tier-aware (Hot/Warm/Cold subject lines based on Buyer_Score__c),
-    surfaces Top-100-Buyer-In-Zip callouts when the property zip is one
-    of this buyer's Top_Buyer_Zips__c, and tags each deal with a strategy
-    hint (Fix & Flip / BRRRR / Buy & Hold) inferred from price/ARV/condition.
+    v3 (2026-05-19, locked R24-template): Both buckets ship the same v4
+    design — per-buyer (Bucket A SendGrid) and statewide (Bucket B CC).
+    Same masthead, same buttons, same layout, same content blocks. Only
+    geographic scope differs. Chris reviewed and approved this design 45+
+    times today; the per-buyer renderer was still pointing at the legacy
+    render_per_buyer_email.build_email by mistake. Fixed by delegating
+    to deal_matcher.build_v4_brief.
 
-    IMPORTANT (per Chris, 4/24/26): The email is branded as a DIRECT deal
-    from Johnson Buys / CheapHomes FL. We NEVER expose which wholesaler
-    originated the deal — no "From: <wholesaler>" line, no "also listed
-    by" callout, no subject reference to the source. Source attribution
-    is tracked internally in `deal_scraper_last_run_deals.json` and
-    `deal_ledger.json` on Chris's Desktop for backend retrieval when a
-    buyer inquires.
+    IMPORTANT (per Chris, R3): The email is branded as a DIRECT deal
+    from CheapHomesFLA. We NEVER expose which wholesaler originated the
+    deal — no "From: <wholesaler>" line, no "also listed by" callout,
+    no subject reference to the source. Source attribution is tracked
+    internally in deal_scraper_last_run_deals.json + deal_ledger.json.
     """
-    return build_email(buyer, deals)
+    # Convert scraper's dict-shape deals → deal_matcher.Deal dataclass instances
+    # and call the v4 builder. Both functions live in deal_matcher.py copied
+    # into the repo root.
+    from tools.cc_html_builder import deals_from_scraper_payload, _bootstrap_desktop_shim
+    _bootstrap_desktop_shim()
+    import deal_matcher as dm  # noqa: E402
+
+    deal_objs = deals_from_scraper_payload(deals)
+    # Populate county from zip where missing — v4 spotlights group by county
+    for d in deal_objs:
+        if not getattr(d, "county", None) and getattr(d, "zip_code", None):
+            d.county = dm.county_from_zip(d.zip_code)
+    subject, html = dm.build_v4_brief(buyer, deal_objs)
+
+    # R3-ENFORCE (locked 2026-05-19 evening): the rendered HTML MUST NOT
+    # contain sourcing-disclosure language. Subscribers never see how we
+    # source deals (wholesaler network, WhatsApp pipeline, etc.). If any
+    # forbidden phrase appears, refuse to send — fail loud, ship nothing.
+    # Caught 2026-05-19 19:48 EDT when a 22K-subscriber CC blast went out
+    # with "sourced from our 26-wholesaler network and the WhatsApp
+    # off-market pipeline" text. Never again.
+    _FORBIDDEN = ("wholesaler", "whatsapp", "off-market pipeline", "26-wholesaler", "wholesale network")
+    _html_lc = html.lower()
+    for _phrase in _FORBIDDEN:
+        if _phrase in _html_lc:
+            raise RuntimeError(
+                f"R3-ENFORCE BLOCK: rendered email contains forbidden phrase "
+                f"{_phrase!r}. Sourcing details must NEVER leak to subscribers. "
+                f"Fix the renderer template before retrying."
+            )
+
+    return subject, html
 
 
 def _v1_render_email_html_DEPRECATED(buyer: dict, deals: list[dict]) -> tuple[str, str]:
@@ -1123,9 +1161,10 @@ def main() -> None:
             bucket_b = _cc_run(all_deals, buyer_emails)
             log.info("Bucket B pipeline result: %s",
                      {k: v for k, v in bucket_b.items() if k != "campaign"})
-            if bucket_b.get("campaign", {}).get("campaign_id"):
+            _campaign = bucket_b.get("campaign") or {}
+            if _campaign.get("campaign_id"):
                 log.info("Bucket B campaign_id: %s (auto_send=%s)",
-                         bucket_b["campaign"]["campaign_id"], bucket_b.get("auto_send"))
+                         _campaign["campaign_id"], bucket_b.get("auto_send"))
         except Exception as e:  # noqa: BLE001
             log.error("Bucket B pipeline crashed (Bucket A already shipped): %s", e)
     else:
