@@ -248,6 +248,153 @@ class Sender:
     note: str = ""
 
 
+# ---------------------------------------------------------------------------
+# ARV sanity guard — added 2026-05-20
+#
+# Wholesalers routinely inflate ARV in their pitch emails to make deals look
+# better than they are. Example caught on 2026-05-19: Shark Investment
+# Properties pushed 2261 NW 2nd St Pompano (989 sqft duplex, asking $400K)
+# with ARV "$1,200,000" — actual market value of that property in 33069
+# is roughly $450-550K. The scraper trusted the wholesaler's number and
+# shipped it to the 22K-subscriber statewide blast.
+#
+# This guard drops any ARV that fails sanity checks. We'd rather show "ARV
+# not provided" than burn credibility with a fantasy number. Logged so
+# Chris has an audit trail of which wholesaler tried what.
+#
+# Premium zips where high $/sqft is plausible (Miami Beach, Bal Harbour,
+# Key Biscayne, Palm Beach, etc.) get a higher ceiling.
+# ---------------------------------------------------------------------------
+
+ARV_PREMIUM_ZIPS = frozenset({
+    # Miami-Dade waterfront/luxury
+    "33109", "33139", "33140", "33141", "33154", "33160", "33149",
+    "33134", "33143", "33146", "33156", "33158",
+    # Palm Beach
+    "33480",
+    # Naples
+    "34102", "34103", "34108",
+    # Jupiter / Juno
+    "33458", "33408",
+    # Fort Lauderdale waterfront
+    "33301", "33304", "33308", "33316",
+})
+
+ARV_MAX_RATIO_VS_PRICE = 2.5      # ARV may not exceed 2.5x asking price
+ARV_MAX_PSF_NONPREMIUM = 1000     # $/sqft cap outside premium zips
+ARV_MAX_PSF_PREMIUM    = 1500     # $/sqft cap in premium zips
+
+# Asking-price sanity bounds. A below-market FL wholesale deal realistically
+# runs from ~$5K (vacant lot / mobile) to ~$50M (large multifamily). Anything
+# outside this is a parse error, not a price. Added after a $275B asking price
+# went out to the full statewide list on 2026-05-20.
+PRICE_MIN = 5_000
+PRICE_MAX = 50_000_000
+
+
+# ---------------------------------------------------------------------------
+# R26-SCRUB — block sourcing-mechanism language in subscriber-facing HTML
+#
+# Locked rule (added 2026-05-20 after Chris caught a leak in yesterday's
+# blast): subscribers NEVER see how we source deals. They see the deals.
+# Anything that hints at the sourcing mechanism — wholesaler relationships,
+# WhatsApp chats, email scraping, aggregation pipelines, network references —
+# breaks the brand and burns competitive ground. This is broader than the
+# original R3-ENFORCE (which only blocked "wholesaler"/"whatsapp"/etc.) and
+# now catches the phrase patterns that slipped past it, plus the "we [verb]
+# [data]" patterns that describe our mechanism.
+#
+# Yesterday's exact leak text (cc_blast_20260519.html):
+#   "sourced from our 26-wholesaler network and the WhatsApp off-market
+#   pipeline"
+# This list blocks the phrase, every paraphrase I can think of, and the
+# verbs (scrape/monitor/aggregate/pull/crawl/ingest/digest) that would
+# describe what the pipeline does.
+#
+# Substring match, case-insensitive. Any hit refuses the send.
+# ---------------------------------------------------------------------------
+
+R26_SCRUB_FORBIDDEN: Tuple[str, ...] = (
+    # The original R3-ENFORCE words
+    "wholesaler", "wholesalers",
+    "whatsapp", "wa group", "wa groups",
+    "off-market pipeline", "off market pipeline",
+    "26-wholesaler", "wholesale network", "wholesaler network",
+    # The verbs that disclose what we DO
+    "we scrape", "we monitor", "we aggregate", "we crawl",
+    "we pull from", "we tap", "we intercept", "we ingest", "we digest",
+    "scraping email", "scraping wholesaler", "scraping inbox",
+    "monitoring wholesaler",
+    # "Sourced from" (the smoking gun phrasing from yesterday's leak)
+    "sourced from our", "sourced via our",
+    "pulled from our", "culled from our",
+    # Channel disclosures
+    "wholesaler email", "wholesaler emails",
+    "wholesaler chat", "wholesaler chats",
+    "broker email", "broker emails",
+    "broker chat", "broker chats",
+    "wholesaler group", "wholesale group",
+    "broker network",
+    # Identifying the count or scope of the source pool
+    "26 wholesaler", "26-wholesaler",
+    "our pipeline of wholesale",
+    "our network of wholesale",
+    "our network of brokers",
+    "our intake",
+    "intake feed",
+)
+
+
+def _enforce_r26_scrub(html: str, context: str = "render") -> None:
+    """Refuse to ship any HTML that discloses our sourcing mechanism.
+
+    Raise RuntimeError if any forbidden phrase appears. Call this on every
+    subscriber-facing render right before returning.
+
+    `context` is included in the error so we can tell whether the leak is in
+    Bucket A per-buyer, Bucket B statewide, or somewhere else.
+    """
+    lc = html.lower()
+    for phrase in R26_SCRUB_FORBIDDEN:
+        if phrase in lc:
+            # Find a small snippet of surrounding text so the dev can fix it fast
+            idx = lc.find(phrase)
+            ctx = html[max(0, idx - 60):idx + len(phrase) + 60]
+            ctx = " ".join(ctx.split())  # collapse whitespace
+            raise RuntimeError(
+                f"R26-SCRUB BLOCK [{context}]: rendered HTML contains forbidden "
+                f"sourcing-disclosure phrase {phrase!r}. "
+                f"Context: ...{ctx[:200]}... "
+                f"Subscribers never see our sourcing mechanism. Fix the source "
+                f"text (likely county_commentary.md, the build_*() intro, or a "
+                f"buyer-facing copy block) and retry."
+            )
+
+
+def _arv_sanity_reason(
+    arv: Optional[int],
+    price: Optional[int],
+    sqft: Optional[int],
+    zip_code: Optional[str],
+) -> Optional[str]:
+    """Return None if ARV is plausible, else a short reason string."""
+    if arv is None or arv <= 0:
+        return None  # nothing to check — null ARV is fine, it just won't render
+
+    if price and price > 0:
+        if arv > price * ARV_MAX_RATIO_VS_PRICE:
+            return f"arv ${arv:,} > {ARV_MAX_RATIO_VS_PRICE}x price ${price:,}"
+
+    if sqft and sqft > 0:
+        psf = arv / sqft
+        ceiling = ARV_MAX_PSF_PREMIUM if (zip_code or "") in ARV_PREMIUM_ZIPS else ARV_MAX_PSF_NONPREMIUM
+        if psf > ceiling:
+            zone = "premium" if (zip_code or "") in ARV_PREMIUM_ZIPS else "non-premium"
+            return f"arv ${arv:,} / {sqft} sqft = ${psf:.0f}/sqft > {zone} ceiling ${ceiling}/sqft"
+
+    return None
+
+
 @dataclass
 class Deal:
     """Parsed deal extracted from a wholesaler email."""
@@ -269,6 +416,92 @@ class Deal:
     strategy_hint_text: str = ""
     parse_confidence: str = "high"  # 'high' | 'medium' | 'low'
     raw_text_excerpt: str = ""
+    arv_dropped_reason: Optional[str] = None  # set if ARV was nulled by sanity guard
+    specs_dropped_reasons: Optional[List[str]] = None  # set if beds/baths/sqft nulled
+    price_dropped_reason: Optional[str] = None  # set if asking price was nulled
+
+    def __post_init__(self):
+        # PRICE sanity guard — RUNS FIRST so a garbage price doesn't poison
+        # the ARV-vs-price ratio check below.
+        # Added 2026-05-20 after a $275,000,000,000 asking price (parse error
+        # on 1647 NW 12th Ct, Fort Lauderdale) went out to the full 22K
+        # statewide list. We guarded ARV and beds/baths/sqft but left the
+        # asking-price field open — this closes that gap.
+        # Bounds: a below-market FL wholesale deal is realistically
+        # $5,000 (vacant lot / mobile) to $50,000,000 (large multifamily).
+        # Anything outside that is a parse error, not a real price.
+        if self.price is not None:
+            if self.price < PRICE_MIN or self.price > PRICE_MAX:
+                self.price_dropped_reason = (
+                    f"price ${self.price:,} outside sane range "
+                    f"${PRICE_MIN:,}–${PRICE_MAX:,}"
+                )
+                try:
+                    log.warning(
+                        "PRICE-GUARD dropped: %s — %s (wholesaler=%s)",
+                        self.address or "?", self.price_dropped_reason,
+                        self.source_wholesaler or "?"
+                    )
+                except Exception:
+                    pass
+                self.price = None
+
+        # ARV sanity guard
+        reason = _arv_sanity_reason(self.arv, self.price, self.sqft, self.zip_code)
+        if reason is not None:
+            self.arv_dropped_reason = reason
+            try:
+                log.warning(
+                    "ARV-GUARD dropped: %s — %s (wholesaler=%s)",
+                    self.address or "?", reason, self.source_wholesaler or "?"
+                )
+            except Exception:
+                pass
+            self.arv = None
+
+        # SPECS guard — beds, baths, sqft sanity
+        # Catches parse errors where wholesaler emails put unrelated numbers
+        # (year, frontage, lot size, sqft mistaken for bath count) into the
+        # bed/bath/sqft fields. Caught 2026-05-20 when one deal showed 25
+        # bathrooms; a survey found 29 deals in one day with impossible
+        # bath counts >6. We'd rather show no number than a fantasy one.
+        specs_reasons: List[str] = []
+        # Beds — most residential is 1-6. Anything >10 is a parse error.
+        if self.beds is not None and self.beds > 10:
+            specs_reasons.append(f"beds={self.beds} > 10")
+            self.beds = None
+        if self.beds is not None and self.beds < 0:
+            specs_reasons.append(f"beds={self.beds} < 0")
+            self.beds = None
+        # Baths — most residential is 1-5. Anything >6 is suspect; >beds+2
+        # is also suspect (5/8 bath house is plausible, 5/15 is not).
+        if self.baths is not None and self.baths > 6:
+            specs_reasons.append(f"baths={self.baths} > 6")
+            self.baths = None
+        if self.baths is not None and self.beds is not None and self.baths > self.beds + 2:
+            specs_reasons.append(f"baths={self.baths} > beds+2 ({(self.beds or 0)+2})")
+            self.baths = None
+        if self.baths is not None and self.baths < 0:
+            specs_reasons.append(f"baths={self.baths} < 0")
+            self.baths = None
+        # Sqft — anything <200 is a parse error (smallest legal residential
+        # in FL is around 400 sqft; <200 is almost certainly a fragment of
+        # another number e.g. frontage or lot dimension)
+        if self.sqft is not None and 0 < self.sqft < 200:
+            specs_reasons.append(f"sqft={self.sqft} < 200")
+            self.sqft = None
+
+        if specs_reasons:
+            self.specs_dropped_reasons = specs_reasons
+            try:
+                log.warning(
+                    "SPECS-GUARD dropped %s @ %s (wholesaler=%s)",
+                    ", ".join(specs_reasons),
+                    self.address or "?",
+                    self.source_wholesaler or "?",
+                )
+            except Exception:
+                pass
 
 
 # ---------------------------------------------------------------------------
@@ -1402,8 +1635,16 @@ def _money(n: Any) -> str:
 def _load_county_commentary() -> Dict[str, str]:
     """Load per-county manual editorial paragraphs from county_commentary.md.
 
-    Format: one `## County Name` heading per county; the lines between that
-    heading and the next `##` (or EOF) become that county's commentary HTML.
+    Format: one `## County Name` heading per county. Within a county, multiple
+    variants are separated by a line containing only '---'. ONE variant is
+    rendered per email per day — picked by day-of-year so all subscribers see
+    the same content on the same day, and the rotation cycles automatically.
+
+    Locked rule (Chris 2026-05-20): one insight per county per email max.
+    Format flexibility: variants don't have to say "Did you know?" — anything
+    that fits Chris's voice (Market note / The play here / Heads up / etc.)
+    is fine.
+
     Empty / placeholder-only sections (just '(...)' in parens) are skipped
     so they don't render as visible empty paragraphs.
     """
@@ -1413,24 +1654,45 @@ def _load_county_commentary() -> Dict[str, str]:
     out: Dict[str, str] = {}
     current_county = None
     current_lines: List[str] = []
+
+    # Pick today's variant deterministically — same content for everyone on
+    # the same day, rotates as the day-of-year ticks forward.
+    today_doy = datetime.now().timetuple().tm_yday
+
+    def _render_para(para: str) -> str:
+        t = _h(para)
+        t = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", t)
+        return f'<p style="font-family:Georgia,serif;font-size:14px;line-height:1.55;color:#1a1a1a;margin:0 0 10px 0;">{t}</p>'
+
     def flush() -> None:
         if not current_county:
             return
         body = "\n".join(current_lines).strip()
-        # Skip placeholder-only sections (single paren note or empty).
-        # A real commentary will have more than just one line of parenthetical note.
         if not body:
             return
+        # Skip placeholder-only "(note)" sections
         if body.startswith("(") and body.endswith(")") and "\n" not in body:
             return
-        # Very simple md→html: paragraphs split on blank lines + **bold**.
-        paras = [b.strip() for b in re.split(r"\n\s*\n", body) if b.strip()]
-        html_paras = []
-        for para in paras:
-            t = _h(para)
-            # bold
-            t = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", t)
-            html_paras.append(f'<p style="font-family:Georgia,serif;font-size:14px;line-height:1.55;color:#1a1a1a;margin:0 0 10px 0;">{t}</p>')
+
+        # Split into variants on '---' lines (standalone horizontal rules).
+        # Use re.MULTILINE + ^---$ pattern so it matches a line that is ONLY
+        # dashes (with optional whitespace), regardless of surrounding context.
+        variants = re.split(r"(?m)^\s*-{3,}\s*$", body)
+        # Drop empty variants and strip surrounding whitespace
+        variants = [v.strip() for v in variants if v.strip()]
+        if not variants:
+            return
+
+        # Pick today's variant deterministically
+        chosen = variants[today_doy % len(variants)]
+
+        # Render that variant only (split internal paragraphs on blank lines).
+        # Belt-and-suspenders: also skip any leftover '---' line that snuck in.
+        paras = [
+            b.strip() for b in re.split(r"\n\s*\n", chosen)
+            if b.strip() and not re.fullmatch(r"\s*-{3,}\s*", b.strip())
+        ]
+        html_paras = [_render_para(p) for p in paras]
         out[current_county] = "\n".join(html_paras)
 
     for raw in p.read_text().splitlines():
@@ -1468,14 +1730,14 @@ def _county_data_summary(deals_in: List["Deal"]) -> str:
     sqfts = [(getattr(d, "sqft", None) or 0, d) for d in deals_in if getattr(d, "sqft", None)]
 
     bits: List[str] = []
-    bits.append(f"<strong>{n} deal{'s' if n != 1 else ''}</strong> in this spotlight today.")
+    bits.append(f"<strong>{n} deal{'s' if n != 1 else ''}</strong> in this spotlight today")
 
     if prices:
         lo, hi = min(prices), max(prices)
         if lo == hi:
-            bits.append(f"All asking <strong>${lo:,}</strong>.")
+            bits.append(f"All asking <strong>${lo:,}</strong>")
         else:
-            bits.append(f"Asking range <strong>${lo:,} – ${hi:,}</strong>.")
+            bits.append(f"Asking range <strong>${lo:,} – ${hi:,}</strong>")
 
     if spreads:
         spreads.sort(reverse=True, key=lambda t: t[0])
@@ -1483,7 +1745,7 @@ def _county_data_summary(deals_in: List["Deal"]) -> str:
         bits.append(
             f'Biggest spread <strong>${top_spread:,}</strong> on '
             f'<em>{_h(top_deal.address)}</em>'
-            f'{" (" + _h(top_deal.city) + ")" if top_deal.city else ""}.'
+            f'{" (" + _h(top_deal.city) + ")" if top_deal.city else ""}'
         )
 
     if sqfts and len(sqfts) > 1:
@@ -1492,14 +1754,19 @@ def _county_data_summary(deals_in: List["Deal"]) -> str:
         if largest[0] >= 2000:
             bits.append(
                 f'Largest property: <strong>{largest[0]:,} sqft</strong> at '
-                f'<em>{_h(largest[1].address)}</em>.'
+                f'<em>{_h(largest[1].address)}</em>'
             )
 
-    inner = " ".join(bits)
+    # Bulleted list (mobile-safe — uses <ul> with inline styles, no client-renderer
+    # quirks). One bullet per stat so it doesn't read as a run-on sentence.
+    items_html = "".join(
+        f'<li style="font-family:Georgia,serif;font-size:14px;line-height:1.5;color:#1a1a1a;margin:0 0 4px 0;">{b}</li>'
+        for b in bits
+    )
     return (
         '<div style="background:#fafaf5;border-left:3px solid #d68a1c;padding:14px 16px;margin:0 0 16px 0;">'
-        f'<div style="font-family:\'Courier New\',monospace;font-size:10px;letter-spacing:2px;color:#d68a1c;text-transform:uppercase;margin-bottom:6px;">Today\'s data</div>'
-        f'<p style="font-family:Georgia,serif;font-size:14px;line-height:1.55;color:#1a1a1a;margin:0;">{inner}</p>'
+        f'<div style="font-family:\'Courier New\',monospace;font-size:10px;letter-spacing:2px;color:#d68a1c;text-transform:uppercase;margin-bottom:8px;">Today\'s data</div>'
+        f'<ul style="margin:0;padding:0 0 0 20px;list-style:disc;">{items_html}</ul>'
         "</div>"
     )
 
@@ -1687,7 +1954,7 @@ def build_v4_brief(buyer: Dict[str, Any], deals: List["Deal"]) -> Tuple[str, str
           <tr>
             <td valign="top" style="width:70px;padding-right:14px;"></td>
             <td valign="top">
-              <a href="https://comps.cheaphomesfla.com/today/{slug}?ref=sendgrid-{datetime.now().strftime('%Y%m%d')}-{slug}&utm_source=sendgrid&utm_campaign=daily_{datetime.now().strftime('%Y%m%d')}&utm_content=county_browse" style="display:block;background:#0a66c2;color:#ffffff;font-family:Georgia,serif;font-size:14px;font-weight:bold;text-decoration:none;padding:14px 18px;border-radius:4px;text-align:center;">See more {_h(county_name)} deals today →</a>
+              <a href="https://comps.cheaphomesfla.com/today/{slug}?ref=sendgrid-{datetime.now().strftime('%Y%m%d')}-{slug}&utm_source=sendgrid&utm_campaign=daily_{datetime.now().strftime('%Y%m%d')}&utm_content=county_browse" style="display:block;background:#ffffff;color:#0a66c2;border:1px solid #0a66c2;font-family:Georgia,serif;font-size:13px;font-weight:normal;text-decoration:none;padding:11px 18px;border-radius:4px;text-align:center;">See all {_h(county_name)} deals →</a>
             </td>
           </tr>
         </table>
@@ -1756,26 +2023,44 @@ def build_v4_brief(buyer: Dict[str, Any], deals: List["Deal"]) -> Tuple[str, str
      the 680px desktop layout. */
   @media only screen and (max-width: 600px) {{
     table.brief-container {{ width:100% !important; }}
-    /* Tighten outer gutter from 32px → 18px on phones */
-    .px-mobile {{ padding-left:18px !important; padding-right:18px !important; }}
-    /* Hero typography scales down */
-    h1.brief-hero {{ font-size:32px !important; line-height:1 !important; }}
-    .brief-spotlight-title {{ font-size:22px !important; }}
-    /* Stat strip 4-col → 2x2 grid on mobile */
-    .stat-cell {{ display:inline-block !important; width:50% !important; box-sizing:border-box !important; border-right:none !important; border-bottom:1px solid #333 !important; }}
+    /* Tighter outer gutter for phones */
+    .px-mobile {{ padding-left:14px !important; padding-right:14px !important; }}
+    /* Header strip: stack volume + date vertically on phones */
+    .hdr-row td {{ display:block !important; width:100% !important; text-align:left !important; padding:2px 0 !important; }}
+    /* Hero typography scales down hard so it doesn't wrap on iPhone SE */
+    h1.brief-hero {{ font-size:30px !important; line-height:1.05 !important; margin-top:6px !important; }}
+    .brief-tagline {{ font-size:13px !important; line-height:1.4 !important; }}
+    .brief-spotlight-title {{ font-size:20px !important; }}
+    /* Stat strip 4-col → 2x2 grid. Important: also fix nth-child border on 2nd col */
+    .stat-cell {{ display:inline-block !important; width:50% !important; box-sizing:border-box !important; border-right:none !important; border-bottom:1px solid #333 !important; padding:14px 10px !important; vertical-align:top !important; }}
     .stat-cell:nth-child(2n) {{ border-right:none !important; }}
     .stat-cell:nth-last-child(-n+2) {{ border-bottom:none !important; }}
+    .stat-cell > div:first-child {{ font-size:20px !important; }}
+    .stat-cell > div:last-child {{ font-size:9px !important; letter-spacing:1px !important; }}
     /* Rates row: 4 cells become 2x2 grid on mobile */
     .rates-row td {{ display:inline-block !important; width:50% !important; box-sizing:border-box !important; }}
     .rates-row td.rates-badge {{ display:block !important; width:100% !important; text-align:center !important; }}
-    /* Per-deal price stack: ASKING / ARV / SPREAD stacks vertically */
-    .price-cell {{ display:block !important; width:100% !important; border-right:none !important; border-bottom:1px solid #e0e0d8 !important; padding:10px 0 !important; }}
-    .price-cell:last-child {{ border-bottom:none !important; }}
-    /* Deal-card number column gets smaller + above content instead of beside */
-    .card-num {{ font-size:26px !important; padding-right:0 !important; padding-bottom:6px !important; width:auto !important; display:block !important; }}
+    /* Per-deal price cells: keep side-by-side on phones but tighter so the
+       three values (Asking / ARV / Spread) still fit on one line at iPhone-SE
+       width. Stacked vertical looks tall and amateurish. */
+    .price-cell {{ padding:10px 6px !important; }}
+    .price-cell > div:first-child {{ font-size:9px !important; letter-spacing:0.5px !important; }}
+    .price-cell > div:last-child {{ font-size:15px !important; }}
+    /* Deal-card number sits above content instead of beside on phones */
+    .card-num {{ font-size:22px !important; padding-right:0 !important; padding-bottom:4px !important; width:auto !important; display:block !important; color:#999 !important; }}
     .card-num-wrap {{ display:block !important; width:100% !important; }}
-    /* Per-deal CTA button stays full width on mobile (already is, just ensure wrap) */
-    a.inquire-btn {{ font-size:13px !important; padding:13px 12px !important; line-height:1.3 !important; }}
+    /* Per-deal CTA button — shorter text, mobile-friendly padding */
+    a.inquire-btn {{ font-size:13px !important; padding:14px 10px !important; line-height:1.3 !important; }}
+    /* County grid at bottom — 3-col → 1-col so each county is readable */
+    td.county-cell {{ display:block !important; width:100% !important; box-sizing:border-box !important; margin:0 0 8px 0 !important; }}
+  }}
+  /* Extra-narrow phones (iPhone SE / Android small) */
+  @media only screen and (max-width: 380px) {{
+    h1.brief-hero {{ font-size:26px !important; }}
+    .px-mobile {{ padding-left:10px !important; padding-right:10px !important; }}
+    .price-cell {{ padding:8px 4px !important; }}
+    .price-cell > div:last-child {{ font-size:14px !important; }}
+    a.inquire-btn {{ font-size:12px !important; padding:12px 8px !important; }}
   }}
 </style>
 </head>
@@ -1785,16 +2070,15 @@ def build_v4_brief(buyer: Dict[str, Any], deals: List["Deal"]) -> Tuple[str, str
 
     <table class="brief-container" role="presentation" cellspacing="0" cellpadding="0" border="0" width="680" style="max-width:680px;width:100%;background:#ffffff;margin:0;">
 
-      <tr><td class="px-mobile" style="padding:36px 32px 8px 32px;">
+      <tr><td class="px-mobile" style="padding:32px 32px 8px 32px;">
         <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
-          <tr>
+          <tr class="hdr-row">
             <td style="font-family:'Courier New',monospace;font-size:11px;letter-spacing:2px;color:#1a1a1a;text-transform:uppercase;">Vol. 1 · Daily Brief</td>
             <td align="right" style="font-family:Georgia,serif;font-size:13px;color:#1a1a1a;">{_h(today_long)}</td>
           </tr>
         </table>
         <h1 class="brief-hero" style="font-family:Georgia,serif;font-size:42px;line-height:1;margin:8px 0 6px 0;font-weight:normal;color:#0d0d0d;">CheapHomesFLA</h1>
-        <div style="font-family:Georgia,serif;font-style:italic;font-size:14px;color:#666;margin-bottom:14px;">Florida's Daily Below-Market Investment Brief — for {first}</div>
-        <a href="https://comps.cheaphomesfla.com/today" style="font-family:Georgia,serif;font-size:14px;color:#0a66c2;text-decoration:none;font-weight:bold;">Browse today's full Florida inventory by county →</a>
+        <div class="brief-tagline" style="font-family:Georgia,serif;font-style:italic;font-size:14px;color:#666;margin-bottom:14px;">Florida's Daily Below-Market Investment Brief — for {first}</div>
       </td></tr>
 
       <tr><td class="px-mobile" style="padding:0 32px;">
@@ -1823,8 +2107,9 @@ def build_v4_brief(buyer: Dict[str, Any], deals: List["Deal"]) -> Tuple[str, str
       <tr><td class="px-mobile" style="padding:24px 32px 4px 32px;">
         <p style="font-family:Georgia,serif;font-size:15px;line-height:1.55;color:#1a1a1a;margin:0;">Hi {first},</p>
         <p style="font-family:Georgia,serif;font-size:15px;line-height:1.55;color:#1a1a1a;margin:8px 0 0 0;">
-          {("Today nothing in our wholesaler intake matched your buy-box (<strong>" + _h(geo_summary) + "</strong>) — but your counties are still active below. Click through to browse each county's live inventory at comps.cheaphomesfla.com. Today's narrowness is normal for narrow zip filters; the daily flow widens over the week.") if n_deals == 0 else ("Today's filtered cut: <strong>" + str(n_deals) + " below-market opportunit" + ("y" if n_deals == 1 else "ies") + "</strong> across <strong>" + _h(geo_summary) + "</strong>. Your buy-box is honored — nothing outside it.")} <a href="https://www.cheaphomesfla.com/?utm_source=sendgrid&utm_campaign=buybox" style="color:#0a66c2;">Adjust counties or zips →</a>
+          {("Today nothing new matched your buy-box (<strong>" + _h(geo_summary) + "</strong>) — but your counties are still active below. Click through to browse each county's live inventory at comps.cheaphomesfla.com. Today's narrowness is normal for narrow zip filters; the daily flow widens over the week.") if n_deals == 0 else ("Today's filtered cut: <strong>" + str(n_deals) + " below-market opportunit" + ("y" if n_deals == 1 else "ies") + "</strong> across <strong>" + _h(geo_summary) + "</strong>. Your buy-box is honored — nothing outside it.")} <a href="https://www.cheaphomesfla.com/?utm_source=sendgrid&utm_campaign=buybox" style="color:#0a66c2;">Adjust counties or zips →</a>
         </p>
+        {('<div style="background:#fafaf5;border-left:3px solid #0a66c2;padding:12px 16px;margin:14px 0 0 0;"><p style="font-family:Georgia,serif;font-size:14px;line-height:1.5;color:#1a1a1a;margin:0;"><strong>That&#39;s a big list today.</strong> Want a tighter cut? <a href="https://www.cheaphomesfla.com/?utm_source=sendgrid&utm_campaign=buybox_narrow" style="color:#0a66c2;font-weight:bold;">Add your target zip codes →</a> and we&#39;ll send only the neighborhoods you actually buy in — no scrolling.</p></div>') if n_deals >= 12 else ''}
       </td></tr>
 
       {''.join(spotlights_html)}
@@ -1844,6 +2129,9 @@ def build_v4_brief(buyer: Dict[str, Any], deals: List["Deal"]) -> Tuple[str, str
 </table>
 </body>
 </html>"""
+
+    # R26-SCRUB — refuse to ship if any sourcing-disclosure phrase made it in
+    _enforce_r26_scrub(html, context="Bucket A v4 brief")
 
     return subject, html
 
@@ -1925,6 +2213,11 @@ def build_cc_statewide(deals: List["Deal"], top_per_county: int = 4, max_spotlig
     county_order_all = sorted(eligible, key=lambda c: (-len(by_county[c]), c))
     county_order = county_order_all[:max_spotlights]
     total_spotlights = len(county_order)
+    # Total counties WITH at least one deal today (vs `total_spotlights` which
+    # is capped at max_spotlights for the email body). Used in the stat panel
+    # and intro so subscribers see we have deals across ~23 counties even
+    # though we only feature ~5 in detail.
+    total_counties_with_deals = len(eligible)
 
     # Subject
     subject = f"{n_deals} below-market opportunities across Florida · CheapHomesFLA · {date_short}"
@@ -2019,7 +2312,7 @@ def build_cc_statewide(deals: List["Deal"], top_per_county: int = 4, max_spotlig
           <tr>
             <td valign="top" style="width:70px;padding-right:14px;"></td>
             <td valign="top">
-              <a href="https://comps.cheaphomesfla.com/today/{slug}?ref=cc-{datetime.now().strftime('%Y%m%d')}-{slug}&utm_source=cc&utm_campaign=daily_{datetime.now().strftime('%Y%m%d')}&utm_content=county_browse" style="display:block;background:#0a66c2;color:#ffffff;font-family:Georgia,serif;font-size:14px;font-weight:bold;text-decoration:none;padding:14px 18px;border-radius:4px;text-align:center;">See more {_h(county_name)} deals today →</a>
+              <a href="https://comps.cheaphomesfla.com/today/{slug}?ref=cc-{datetime.now().strftime('%Y%m%d')}-{slug}&utm_source=cc&utm_campaign=daily_{datetime.now().strftime('%Y%m%d')}&utm_content=county_browse" style="display:block;background:#ffffff;color:#0a66c2;border:1px solid #0a66c2;font-family:Georgia,serif;font-size:13px;font-weight:normal;text-decoration:none;padding:11px 18px;border-radius:4px;text-align:center;">See all {_h(county_name)} deals →</a>
             </td>
           </tr>
         </table>
@@ -2134,7 +2427,7 @@ def build_cc_statewide(deals: List["Deal"], top_per_county: int = 4, max_spotlig
                     f'<div style="font-family:\'Courier New\',monospace;font-size:10px;letter-spacing:1px;color:#999;text-transform:uppercase;margin-top:4px;">Updated daily</div>'
                 )
             row_cells.append(
-                f'<td valign="top" width="33%" style="padding:0 4px 8px 4px;">'
+                f'<td class="county-cell" valign="top" width="33%" style="padding:0 4px 8px 4px;">'
                 f'<a href="https://comps.cheaphomesfla.com/today/{slug}?utm_source=cc&utm_campaign=daily_{datetime.now().strftime("%Y%m%d")}&utm_content=county_grid" '
                 f'style="display:block;background:#fafaf5;border:1px solid #e0e0d8;border-radius:6px;padding:14px;text-decoration:none;color:#1a1a1a;">'
                 f'<div style="font-family:Georgia,serif;font-size:16px;color:#0d0d0d;font-weight:bold;line-height:1.2;margin-bottom:8px;">{_h(c)}</div>'
@@ -2144,7 +2437,7 @@ def build_cc_statewide(deals: List["Deal"], top_per_county: int = 4, max_spotlig
             )
         # Pad row if last row has fewer than 3 cells
         while len(row_cells) < 3:
-            row_cells.append('<td width="33%" style="padding:0 4px 8px 4px;"></td>')
+            row_cells.append('<td class="county-cell" width="33%" style="padding:0 4px 8px 4px;"></td>')
         grid_rows_html.append(f'<tr>{"".join(row_cells)}</tr>')
     county_grid_html = (
         '<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" '
@@ -2163,18 +2456,31 @@ def build_cc_statewide(deals: List["Deal"], top_per_county: int = 4, max_spotlig
 <style type="text/css">
   @media only screen and (max-width: 600px) {{
     table.brief-container {{ width:100% !important; }}
-    .px-mobile {{ padding-left:18px !important; padding-right:18px !important; }}
-    h1.brief-hero {{ font-size:32px !important; line-height:1 !important; }}
-    .brief-spotlight-title {{ font-size:22px !important; }}
-    .stat-cell {{ display:inline-block !important; width:50% !important; box-sizing:border-box !important; border-right:none !important; border-bottom:1px solid #333 !important; }}
+    .px-mobile {{ padding-left:14px !important; padding-right:14px !important; }}
+    .hdr-row td {{ display:block !important; width:100% !important; text-align:left !important; padding:2px 0 !important; }}
+    h1.brief-hero {{ font-size:30px !important; line-height:1.05 !important; margin-top:6px !important; }}
+    .brief-tagline {{ font-size:13px !important; line-height:1.4 !important; }}
+    .brief-spotlight-title {{ font-size:20px !important; }}
+    .stat-cell {{ display:inline-block !important; width:50% !important; box-sizing:border-box !important; border-right:none !important; border-bottom:1px solid #333 !important; padding:14px 10px !important; vertical-align:top !important; }}
     .stat-cell:nth-last-child(-n+2) {{ border-bottom:none !important; }}
+    .stat-cell > div:first-child {{ font-size:20px !important; }}
+    .stat-cell > div:last-child {{ font-size:9px !important; letter-spacing:1px !important; }}
     .rates-row td {{ display:inline-block !important; width:50% !important; box-sizing:border-box !important; }}
     .rates-row td.rates-badge {{ display:block !important; width:100% !important; text-align:center !important; }}
-    .price-cell {{ display:block !important; width:100% !important; border-right:none !important; border-bottom:1px solid #e0e0d8 !important; padding:10px 0 !important; }}
-    .price-cell:last-child {{ border-bottom:none !important; }}
-    .card-num {{ font-size:26px !important; padding-right:0 !important; padding-bottom:6px !important; width:auto !important; display:block !important; }}
+    .price-cell {{ padding:10px 6px !important; }}
+    .price-cell > div:first-child {{ font-size:9px !important; letter-spacing:0.5px !important; }}
+    .price-cell > div:last-child {{ font-size:15px !important; }}
+    .card-num {{ font-size:22px !important; padding-right:0 !important; padding-bottom:4px !important; width:auto !important; display:block !important; color:#999 !important; }}
     .card-num-wrap {{ display:block !important; width:100% !important; }}
-    a.inquire-btn {{ font-size:13px !important; padding:13px 12px !important; line-height:1.3 !important; }}
+    a.inquire-btn {{ font-size:13px !important; padding:14px 10px !important; line-height:1.3 !important; }}
+    td.county-cell {{ display:block !important; width:100% !important; box-sizing:border-box !important; margin:0 0 8px 0 !important; }}
+  }}
+  @media only screen and (max-width: 380px) {{
+    h1.brief-hero {{ font-size:26px !important; }}
+    .px-mobile {{ padding-left:10px !important; padding-right:10px !important; }}
+    .price-cell {{ padding:8px 4px !important; }}
+    .price-cell > div:last-child {{ font-size:14px !important; }}
+    a.inquire-btn {{ font-size:12px !important; padding:12px 8px !important; }}
   }}
 </style>
 </head>
@@ -2183,16 +2489,15 @@ def build_cc_statewide(deals: List["Deal"], top_per_county: int = 4, max_spotlig
   <tr><td align="center">
     <table class="brief-container" role="presentation" cellspacing="0" cellpadding="0" border="0" width="680" style="max-width:680px;width:100%;background:#ffffff;margin:0;">
 
-      <tr><td class="px-mobile" style="padding:36px 32px 8px 32px;">
+      <tr><td class="px-mobile" style="padding:32px 32px 8px 32px;">
         <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
-          <tr>
+          <tr class="hdr-row">
             <td style="font-family:'Courier New',monospace;font-size:11px;letter-spacing:2px;color:#1a1a1a;text-transform:uppercase;">Vol. 1 · Daily Brief</td>
             <td align="right" style="font-family:Georgia,serif;font-size:13px;color:#1a1a1a;">{_h(today_long)}</td>
           </tr>
         </table>
         <h1 class="brief-hero" style="font-family:Georgia,serif;font-size:42px;line-height:1;margin:8px 0 6px 0;font-weight:normal;color:#0d0d0d;">CheapHomesFLA</h1>
-        <div style="font-family:Georgia,serif;font-style:italic;font-size:14px;color:#666;margin-bottom:14px;">Florida's Daily Below-Market Investment Brief</div>
-        <a href="https://comps.cheaphomesfla.com/today" style="font-family:Georgia,serif;font-size:14px;color:#0a66c2;text-decoration:none;font-weight:bold;">Browse today's full Florida inventory by county →</a>
+        <div class="brief-tagline" style="font-family:Georgia,serif;font-size:15px;color:#0d0d0d;font-weight:bold;margin-bottom:14px;">Florida's Daily Below-Market Investment Brief</div>
       </td></tr>
 
       <tr><td class="px-mobile" style="padding:0 32px;">
@@ -2203,7 +2508,7 @@ def build_cc_statewide(deals: List["Deal"], top_per_county: int = 4, max_spotlig
               <div style="font-family:'Courier New',monospace;font-size:10px;letter-spacing:1.5px;color:#bbb;text-transform:uppercase;margin-top:4px;">Active Today</div>
             </td>
             <td class="stat-cell" style="padding:18px 14px;border-right:1px solid #333;">
-              <div style="font-family:Georgia,serif;font-size:24px;color:#ffffff;line-height:1;">{total_spotlights}</div>
+              <div style="font-family:Georgia,serif;font-size:24px;color:#ffffff;line-height:1;">{total_counties_with_deals}</div>
               <div style="font-family:'Courier New',monospace;font-size:10px;letter-spacing:1.5px;color:#bbb;text-transform:uppercase;margin-top:4px;">Counties Active</div>
             </td>
             <td class="stat-cell" style="padding:18px 14px;border-right:1px solid #333;">
@@ -2218,21 +2523,26 @@ def build_cc_statewide(deals: List["Deal"], top_per_county: int = 4, max_spotlig
         </table>
       </td></tr>
 
-      <tr><td class="px-mobile" style="padding:24px 32px 4px 32px;">
-        <p style="font-family:Georgia,serif;font-size:15px;line-height:1.55;color:#1a1a1a;margin:0;">
-          <strong>Today's statewide brief:</strong> {n_deals} below-market opportunities across {total_spotlights} Florida counties. Below: every active deal, grouped by county. At the bottom: links to every Florida county we cover for buyers who want to widen the lens.
+      <tr><td class="px-mobile" style="padding:26px 32px 4px 32px;">
+        <p style="font-family:Georgia,serif;font-size:19px;line-height:1.4;color:#0d0d0d;margin:0 0 14px 0;font-weight:bold;">
+          {n_deals} below-market properties hit our desk across {total_counties_with_deals} Florida counties today. Here's where the money is.
         </p>
-        <p style="font-family:Georgia,serif;font-size:14px;line-height:1.55;color:#555;margin:12px 0 0 0;font-style:italic;">
-          Want a brief filtered to only your counties + zips instead of statewide? <a href="https://www.cheaphomesfla.com/?utm_source=cc&utm_campaign=buybox" style="color:#0a66c2;font-style:normal;">Set your buy-box →</a> Takes 60 seconds, runs daily after that.
+        <ul style="font-family:Georgia,serif;font-size:15px;line-height:1.6;color:#1a1a1a;margin:0 0 14px 0;padding:0 0 0 20px;list-style:disc;">
+          <li><strong>{total_spotlights} counties</strong> broken down in full below — the markets moving hardest right now</li>
+          <li><strong>Every price verified</strong> against comps before it reaches you. No inflated numbers, no fantasy ARVs</li>
+          <li><strong>{total_counties_with_deals} counties active</strong> today, with every Florida market we cover linked at the bottom</li>
+        </ul>
+        <p style="font-family:Georgia,serif;font-size:15px;line-height:1.55;color:#1a1a1a;margin:14px 0 0 0;">
+          Want only your markets? <a href="https://www.cheaphomesfla.com/?utm_source=cc&utm_campaign=buybox" style="color:#0a66c2;font-weight:bold;">Set your buy-box →</a> and we'll deliver just your counties and price band, every single morning.
         </p>
       </td></tr>
 
       {''.join(spotlights_html)}
 
-      <tr><td class="px-mobile" style="padding:40px 32px 12px 32px;border-top:1px solid #1a1a1a;">
-        <div style="font-family:'Courier New',monospace;font-size:10px;letter-spacing:2px;color:#1a1a1a;text-transform:uppercase;margin-bottom:12px;">Active across the rest of Florida</div>
-        <p style="font-family:Georgia,serif;font-size:14px;line-height:1.55;color:#1a1a1a;margin:0 0 14px 0;">
-          Click any county to see what's live there today. Inventory updates daily.
+      <tr><td class="px-mobile" style="padding:40px 32px 12px 32px;border-top:2px solid #1a1a1a;">
+        <div style="font-family:Georgia,serif;font-size:20px;color:#0d0d0d;font-weight:bold;margin-bottom:6px;">Every county we cover — live right now</div>
+        <p style="font-family:Georgia,serif;font-size:15px;line-height:1.55;color:#1a1a1a;margin:0 0 16px 0;">
+          Tap any market to pull today's full inventory. Updated every morning, statewide.
         </p>
         <div>{county_grid_html}</div>
       </td></tr>
@@ -2252,6 +2562,8 @@ def build_cc_statewide(deals: List["Deal"], top_per_county: int = 4, max_spotlig
 </table>
 </body>
 </html>"""
+    # R26-SCRUB — refuse to ship if any sourcing-disclosure phrase made it in
+    _enforce_r26_scrub(html, context="Bucket B statewide")
     return subject, html
 
 

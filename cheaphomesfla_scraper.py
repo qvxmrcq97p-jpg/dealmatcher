@@ -224,6 +224,18 @@ SUNDAY_SKIP = True       # mirror seller campaign; set False to send on Sundays
 MAX_RUN_SECONDS = 600    # hard ceiling so launchd doesn't pile up runs
 DEDUP_TAG_PREFIX = "CH-DEAL"   # Salesforce Task Subject prefix
 DRY_RUN = os.getenv("DRY_RUN", "").lower() in ("1", "true", "yes")
+# SEND_FROM_DUMP: skip the mail scrape entirely and load deals from the last
+# dump file instead. This is how the two-step blast works without re-scraping:
+# step 1 (DRY_RUN) scrapes once and writes the dump + renders drafts; step 2
+# (SEND_FROM_DUMP, no DRY_RUN) sends from that SAME dump. Guarantees the email
+# you reviewed is byte-for-byte the email that ships, and removes the
+# double-scrape that collapsed the window to ~1 deal on 2026-05-20.
+SEND_FROM_DUMP = os.getenv("SEND_FROM_DUMP", "").lower() in ("1", "true", "yes")
+# SKIP_BUCKET_B: hard lock to send Bucket A (per-buyer) ONLY and never fire
+# the statewide 22K blast. Used by "Send Bucket A Only.command" so we can ship
+# the per-buyer emails without re-blasting the list that already got Bucket B
+# today. Prevents a double-send to the 22K master list.
+SKIP_BUCKET_B = os.getenv("SKIP_BUCKET_B", "").lower() in ("1", "true", "yes")
 TEST_SEND_TO = os.getenv("TEST_SEND_TO", "").strip()   # if set, route ALL matched emails to this address
 DEALS_DUMP_FILE = DESKTOP / "deal_scraper_last_run_deals.json"   # always written for inspection
 DEAL_LEDGER_FILE = DESKTOP / "deal_ledger.json"   # persistent lifetime ledger of unique properties
@@ -471,6 +483,34 @@ def _parsed_to_dict(
     }
 
 
+def _extract_forwarded_sender(subject: str, body: str) -> tuple[str | None, str | None]:
+    """For a forwarded email ('FW:'/'Fwd:'), pull the ORIGINAL sender out of
+    the quoted forward header so we credit the true source, not the forwarder.
+
+    Returns (name, email) or (None, None) if not a forward / not found.
+    Caught 2026-05-20: Aleksandr forwarded a 'FW: Florida properties...' list;
+    we credited him as the source when the real originator was inside the
+    quoted 'From:' header. This recovers that originator.
+    """
+    if not re.match(r"^\s*(fw|fwd|re-fwd)\s*:", subject or "", re.IGNORECASE):
+        return None, None
+    # Strip HTML to plain-ish text so the quoted header is readable
+    text = re.sub(r"<[^>]+>", " ", body or "")
+    text = text.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
+    text = re.sub(r"&nbsp;", " ", text)
+    # Find the first quoted "From:" line in the forwarded header block
+    m = re.search(r"From:\s*([^\n<]+?)\s*<\s*([\w.\-+]+@[\w.\-]+\.\w+)\s*>", text, re.IGNORECASE)
+    if m:
+        name = m.group(1).strip().strip('"').strip()
+        email = m.group(2).strip().lower()
+        return (name or None), (email or None)
+    # Fallback: "From: someone@example.com" with no display name
+    m2 = re.search(r"From:\s*([\w.\-+]+@[\w.\-]+\.\w+)", text, re.IGNORECASE)
+    if m2:
+        return None, m2.group(1).strip().lower()
+    return None, None
+
+
 def parse_deals(
     msg: dict,
     wholesaler_addr: str,
@@ -494,10 +534,22 @@ def parse_deals(
         parsed = parse_email_body(body)
         wholesaler_name = wholesalers_lookup.get(wholesaler_addr, wholesaler_addr)
 
-    return [
-        _parsed_to_dict(p, msg, wholesaler_addr, wholesaler_name, body)
-        for p in parsed
-    ]
+    # If this is a forward, recover the ORIGINAL sender as the true source.
+    fwd_name, fwd_email = _extract_forwarded_sender(subject, body)
+    orig_source = fwd_name or fwd_email  # prefer display name, else email
+
+    out = []
+    for p in parsed:
+        d = _parsed_to_dict(p, msg, wholesaler_addr, wholesaler_name, body)
+        if orig_source:
+            # Keep who forwarded it, but record the true originator separately
+            # so sourcing points to the real seller-side wholesaler.
+            d["forwarded_by"] = wholesaler_name
+            d["original_source"] = orig_source
+            if fwd_email:
+                d["original_source_email"] = fwd_email
+        out.append(d)
+    return out
 
 
 # =============================================================================
@@ -577,9 +629,22 @@ def collapse_cross_posted(deals: list[dict]) -> list[dict]:
         label = d.get("wholesaler_name") or d.get("wholesaler_email")
         if label and label != existing.get("wholesaler_name") and label not in existing["also_from"]:
             existing["also_from"].append(label)
-        # Keep the lower price if both have one
+        # Keep the lower price — but only consider SANE prices. A wholesaler
+        # parse error ($275,000,000,000 or $1) must never win the cross-post
+        # pick. Sane band matches deal_matcher's PRICE_MIN/PRICE_MAX ($5K–$50M).
+        # Added 2026-05-20 after a $275B price shipped to the full list.
+        _SANE_MIN, _SANE_MAX = 5_000, 50_000_000
+        def _sane(p):
+            return p is not None and _SANE_MIN <= p <= _SANE_MAX
         dp, ep = d.get("asking_price"), existing.get("asking_price")
-        if dp is not None and (ep is None or dp < ep):
+        # If the existing price is garbage but the new one is sane, take the new.
+        if _sane(dp) and not _sane(ep):
+            existing["asking_price"] = dp
+            existing.setdefault("price_history", []).append(
+                {"from": label, "price": dp, "email_id": d.get("email_id")}
+            )
+        # If both are sane, keep the lower (cross-posted markups lose).
+        elif _sane(dp) and _sane(ep) and dp < ep:
             existing["asking_price"] = dp
             existing.setdefault("price_history", []).append(
                 {"from": label, "price": dp, "email_id": d.get("email_id")}
@@ -773,15 +838,33 @@ def deal_matches_buyer(deal: dict, buyer: dict) -> bool:
         # When they fill their buy-box, they auto-graduate to per-buyer matching.
         return False
 
-    # ── 4. Geo filter (buyer has SOME geo criteria set) ──
+    # ── 4. Geo filter — R16: per-county zip refinement ──
+    # The rule (locked): zips REFINE within a county, they don't just add.
+    # So a buyer with county=Miami-Dade + zip=33133 should get ONLY 33133
+    # deals in Miami-Dade — not the whole county. A buyer with county and
+    # NO zips for that county gets the whole county. A buyer with zips but
+    # no matching county gets those zips wherever they are (zip-only).
+    #
+    # (Caught 2026-05-20: after county was populated on deals, a plain
+    # "zip OR county" check let zip-refined buyers like Axel match the whole
+    # county. This restores the refinement.)
+    import deal_matcher as _dm
     deal_zip = (deal.get("zip") or "").strip()
     deal_city = (deal.get("city") or "").strip().lower()
     deal_county = (deal.get("county") or "").strip()
 
     geo_match = False
-    if zips and deal_zip and deal_zip in zips:
-        geo_match = True
-    elif counties and deal_county and deal_county in counties:
+    if deal_county and deal_county in counties:
+        # Buyer wants this county. Do they have zips specified INSIDE it?
+        zips_in_county = [z for z in zips if _dm.county_from_zip(z) == deal_county]
+        if zips_in_county:
+            # Refine: only the buyer's zips within this county match.
+            geo_match = bool(deal_zip and deal_zip in zips_in_county)
+        else:
+            # No zip refinement for this county — whole county matches.
+            geo_match = True
+    elif zips and deal_zip and deal_zip in zips:
+        # Zip targeting in a county the buyer didn't list as a whole county.
         geo_match = True
     elif city_picks and deal_city:
         if any(deal_city == c.strip().lower() for c in city_picks):
@@ -987,56 +1070,88 @@ def main() -> None:
 
     state = load_state()
     since = state.get("last_run_iso")
-    log.info("Pulling mail since: %s", since or "(first run)")
 
-    # 1. Fetch mail
-    token = graph_access_token()
-    msgs = fetch_new_messages(token, since)
-    log.info("Fetched %d messages from %s", len(msgs), TARGET_MAILBOX)
+    if SEND_FROM_DUMP:
+        # ── Step-2 send path: do NOT scrape. Load the deals the step-1 dry-run
+        # already wrote, so the email we send is byte-for-byte the one that was
+        # reviewed. No second mail fetch → no window collapse, no drift.
+        log.info("SEND_FROM_DUMP=1 — loading deals from %s (no mail scrape)", DEALS_DUMP_FILE)
+        if not DEALS_DUMP_FILE.exists():
+            log.error("SEND_FROM_DUMP set but %s does not exist. Run the dry-run "
+                      "step first to produce the dump. Aborting.", DEALS_DUMP_FILE)
+            return
+        all_deals = json.loads(DEALS_DUMP_FILE.read_text())
+        log.info("Loaded %d deals from dump", len(all_deals))
+    else:
+        log.info("Pulling mail since: %s", since or "(first run)")
 
-    # 2. Filter + parse
-    all_deals: list[dict] = []
-    for msg in msgs:
-        is_ws, addr = is_wholesaler_mail(msg, wholesalers)
-        if not is_ws:
-            continue
+        # 1. Fetch mail
+        token = graph_access_token()
+        msgs = fetch_new_messages(token, since)
+        log.info("Fetched %d messages from %s", len(msgs), TARGET_MAILBOX)
+
+        # 2. Filter + parse
+        all_deals = []
+        for msg in msgs:
+            is_ws, addr = is_wholesaler_mail(msg, wholesalers)
+            if not is_ws:
+                continue
+            try:
+                deals = parse_deals(msg, addr, lookup)
+                all_deals.extend(deals)
+            except Exception as e:  # noqa: BLE001
+                log.warning("Parse failed on %s: %s", msg.get("id"), e)
+        raw_count = len(all_deals)
+        log.info("Parsed %d raw deals across %d wholesaler emails", raw_count, sum(
+            1 for m in msgs if is_wholesaler_mail(m, wholesalers)[0]
+        ))
+
+        # Collapse cross-posted deals (same property from multiple wholesalers in one run)
+        all_deals = collapse_cross_posted(all_deals)
+        collapsed_count = len(all_deals)
+        crosspost_count = raw_count - collapsed_count
+        if crosspost_count:
+            log.info("Dedup collapsed %d cross-posts → %d unique deals this run",
+                     crosspost_count, collapsed_count)
+
+        # Update the lifetime ledger (persistent view of every unique property ever seen,
+        # every wholesaler that has blasted it, and price history over time).
+        ledger = load_deal_ledger()
+        update_deal_ledger(ledger, all_deals)
+        save_deal_ledger(ledger)
+        log.info("Lifetime ledger: %d unique properties tracked", len(ledger))
+
+        # Always dump parsed deals to ~/Desktop so you can eyeball them even outside dry-run
         try:
-            deals = parse_deals(msg, addr, lookup)
-            all_deals.extend(deals)
+            DEALS_DUMP_FILE.write_text(json.dumps(all_deals, indent=2, default=str))
+            log.info("Parsed deals written to %s", DEALS_DUMP_FILE)
         except Exception as e:  # noqa: BLE001
-            log.warning("Parse failed on %s: %s", msg.get("id"), e)
-    raw_count = len(all_deals)
-    log.info("Parsed %d raw deals across %d wholesaler emails", raw_count, sum(
-        1 for m in msgs if is_wholesaler_mail(m, wholesalers)[0]
-    ))
-
-    # Collapse cross-posted deals (same property from multiple wholesalers in one run)
-    all_deals = collapse_cross_posted(all_deals)
-    collapsed_count = len(all_deals)
-    crosspost_count = raw_count - collapsed_count
-    if crosspost_count:
-        log.info("Dedup collapsed %d cross-posts → %d unique deals this run",
-                 crosspost_count, collapsed_count)
-
-    # Update the lifetime ledger (persistent view of every unique property ever seen,
-    # every wholesaler that has blasted it, and price history over time).
-    ledger = load_deal_ledger()
-    update_deal_ledger(ledger, all_deals)
-    save_deal_ledger(ledger)
-    log.info("Lifetime ledger: %d unique properties tracked", len(ledger))
-
-    # Always dump parsed deals to ~/Desktop so you can eyeball them even outside dry-run
-    try:
-        DEALS_DUMP_FILE.write_text(json.dumps(all_deals, indent=2, default=str))
-        log.info("Parsed deals written to %s", DEALS_DUMP_FILE)
-    except Exception as e:  # noqa: BLE001
-        log.warning("Could not write deals dump: %s", e)
+            log.warning("Could not write deals dump: %s", e)
 
     if not all_deals:
         log.info("No new deals — exiting clean.")
         state["last_run_iso"] = start_ts.isoformat()
         save_state(state)
         return
+
+    # Derive county from zip on every deal BEFORE matching. The parser only
+    # fills `zip`; `county` was left None, which meant county-wide buyers
+    # (e.g. Nick = Miami-Dade county-wide, no zips) matched NOTHING — the geo
+    # check compared an empty deal county against their county list. Caught
+    # 2026-05-20. Now county is populated up front so county-wide matching
+    # works. (The render path already did this separately; matching didn't.)
+    try:
+        import deal_matcher as _dm
+        _county_filled = 0
+        for _d in all_deals:
+            if not _d.get("county") and _d.get("zip"):
+                _c = _dm.county_from_zip(_d.get("zip"))
+                if _c:
+                    _d["county"] = _c
+                    _county_filled += 1
+        log.info("Populated county from zip on %d deals (for county-wide matching)", _county_filled)
+    except Exception as e:  # noqa: BLE001
+        log.warning("Could not populate county from zip before matching: %s", e)
 
     # 3. Load buyers + existing dedup tags
     sf = sf_client()
@@ -1154,19 +1269,51 @@ def main() -> None:
     # Bucket A buyers off the CC master list to prevent double-email, then
     # creates a CC v3 campaign and (if CC_AUTO_SEND=true) sends it.
     # Failures here are logged but don't crash the run — Bucket A already shipped.
-    if not DRY_RUN:
-        try:
-            from tools.cc_blast_pipeline import run as _cc_run
-            buyer_emails = [b.get("Email") for b in buyers if b.get("Email")]
-            bucket_b = _cc_run(all_deals, buyer_emails)
-            log.info("Bucket B pipeline result: %s",
-                     {k: v for k, v in bucket_b.items() if k != "campaign"})
-            _campaign = bucket_b.get("campaign") or {}
-            if _campaign.get("campaign_id"):
-                log.info("Bucket B campaign_id: %s (auto_send=%s)",
-                         _campaign["campaign_id"], bucket_b.get("auto_send"))
-        except Exception as e:  # noqa: BLE001
-            log.error("Bucket B pipeline crashed (Bucket A already shipped): %s", e)
+    if SKIP_BUCKET_B:
+        # Bucket-A-only send. The 22K statewide blast already went out today;
+        # this run only ships per-buyer emails. Hard skip so we can never
+        # double-blast the master list.
+        log.info("SKIP_BUCKET_B set — Bucket A only, NOT firing the statewide "
+                 "blast (already sent today).")
+    elif TEST_SEND_TO:
+        # In test mode (all Bucket A emails routed to a single test address)
+        # we must NEVER fire the real statewide blast to the 22K list. A test
+        # run is for the operator's eyes only.
+        log.info("TEST_SEND_TO is set — SKIPPING real Bucket B statewide send "
+                 "(test mode never blasts the 22K list).")
+    elif not DRY_RUN:
+        # ── DEAL-COUNT FLOOR (locked 2026-05-20) ───────────────────────
+        # A statewide blast to the ~22K list must NEVER fire on a near-empty
+        # scrape. On 2026-05-20 a collapsed scrape window produced a single
+        # deal (with a $275B parse-error price) and it shipped to the whole
+        # list. Root cause: the scrape window had narrowed to ~1 email.
+        # Rule per Chris: "if you only scrape one fucking deal you don't send
+        # it out." Below MIN_DEALS_FOR_BLAST we ABORT the Bucket B send and
+        # log a red-flag error instead. Override only via env if ever needed.
+        MIN_DEALS_FOR_BLAST = int(os.getenv("MIN_DEALS_FOR_BLAST", "15"))
+        n_deals_for_blast = len(all_deals)
+        if n_deals_for_blast < MIN_DEALS_FOR_BLAST:
+            log.error(
+                "🚨 DEAL-COUNT FLOOR: scrape produced only %d deal(s) "
+                "(floor=%d). ABORTING Bucket B statewide send — a near-empty "
+                "blast to the 22K list is almost always a collapsed scrape "
+                "window or a broken pull, NOT a real quiet day. Re-run with a "
+                "full 24h state reset and verify the deal count before sending.",
+                n_deals_for_blast, MIN_DEALS_FOR_BLAST,
+            )
+        else:
+            try:
+                from tools.cc_blast_pipeline import run as _cc_run
+                buyer_emails = [b.get("Email") for b in buyers if b.get("Email")]
+                bucket_b = _cc_run(all_deals, buyer_emails)
+                log.info("Bucket B pipeline result: %s",
+                         {k: v for k, v in bucket_b.items() if k != "campaign"})
+                _campaign = bucket_b.get("campaign") or {}
+                if _campaign.get("campaign_id"):
+                    log.info("Bucket B campaign_id: %s (auto_send=%s)",
+                             _campaign["campaign_id"], bucket_b.get("auto_send"))
+            except Exception as e:  # noqa: BLE001
+                log.error("Bucket B pipeline crashed (Bucket A already shipped): %s", e)
     else:
         log.info("DRY_RUN — skipping Bucket B")
 

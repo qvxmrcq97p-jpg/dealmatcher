@@ -3,12 +3,20 @@ name: Daily CHF Morning Blast
 # Runs the full pipeline: scrape → build broadcast HTML → SendGrid
 # personalized track (per-investor) → optional CC broadcast push.
 #
-# Schedule: Mon-Fri at 9:30 AM ET (= 13:30 UTC during EDT, 14:30 UTC during EST).
-# We use BOTH cron expressions so the run lands at 9:30 AM ET year-round.
-# GitHub Actions skips duplicates because only one will fire on any given day
-# (DST shifts which of the two is "9:30 AM ET").
+# Schedule: Mon-Fri at 13:30 UTC = 9:30 AM EDT during summer, 8:30 AM EST during winter.
 #
-# Why 9:30 ET (changed from 9:00 ET on 2026-05-13):
+# WHY ONE CRON, NOT TWO (fixed 2026-05-17 after Sunday-brief double-send incident):
+#   We previously had two cron expressions ("30 13 * * 1-5" + "30 14 * * 1-5")
+#   under the (wrong) assumption that GitHub Actions would dedupe to "the one
+#   that's 9:30 AM ET right now." It does not. Both fired independently,
+#   producing two sends per day to the 22K list. Today's Sunday-brief
+#   workflow had the same dual-cron pattern and sent twice at 10:44 AM and
+#   11:39 AM EDT, hitting the full list each time. This workflow is now
+#   single-cron. We accept the DST shift (9:30 EDT summer / 8:30 EST winter);
+#   the alternative — two crons + an inline guard — adds complexity for an
+#   audience that mostly opens in a 2-hour window anyway.
+#
+# Why 9:30 ET window (changed from 9:00 ET on 2026-05-13):
 #   Inbox audit across recent weekdays showed the morning wholesaler-email
 #   batch consistently wraps by ~8:30 ET (today's batch landed 07:50-08:03).
 #   Scraping at 9:30 ET captures the full morning batch with ~60 min of
@@ -17,11 +25,12 @@ name: Daily CHF Morning Blast
 #   appears in the next morning's blast — correct cadence for a daily product.
 #
 # Manual trigger via "Run workflow" button on the Actions tab — supports
-# dry-run for safe iteration before flipping to --send.
+# dry-run for safe iteration before flipping to --send. workflow_dispatch
+# defaults to dry (line ~30) so accidental re-runs from the Actions UI are
+# safe; scheduled fires default to live per the standing automation green-light.
 on:
   schedule:
-    - cron: "30 13 * * 1-5"   # 9:30 AM EDT (UTC-4)
-    - cron: "30 14 * * 1-5"   # 9:30 AM EST (UTC-5)
+    - cron: "30 13 * * 1-5"   # 9:30 AM EDT (UTC-4) / 8:30 AM EST (UTC-5). Single cron — see header.
   workflow_dispatch:
     inputs:
       send_mode:

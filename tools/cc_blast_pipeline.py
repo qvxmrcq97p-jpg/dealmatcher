@@ -118,9 +118,24 @@ def run(scraper_deals: list[dict], buyer_emails: list[str]) -> dict:
 
 
 if __name__ == "__main__":
-    # Allow manual test from the command line. Reads deals from the JSON
+    # Allow manual run from the command line. Reads deals from the JSON
     # dumped by the scraper's last run.
     import json
+
+    # Load .env.cheaphomesfla — when run standalone (not imported by the
+    # scraper, which loads env itself) we MUST load it or CC_LIST_ID and the
+    # CC OAuth tokens are missing and the send silently skips. (Caught
+    # 2026-05-20: the Bucket-B-only command ran this directly and the blast
+    # never fired because env wasn't loaded.)
+    env_file = Path.home() / "dealmatcher" / ".env.cheaphomesfla"
+    if env_file.exists():
+        for line in env_file.read_text().splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, _, v = line.partition("=")
+            os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
     dump = Path.home() / "Desktop" / "deal_scraper_last_run_deals.json"
@@ -129,6 +144,17 @@ if __name__ == "__main__":
         sys.exit(1)
     deals = json.loads(dump.read_text())
 
-    # Buyer emails arg optional; for a one-off test we can pass [] to skip dedup
+    # Guard: confirm CC_LIST_ID is present before we even try, so we fail loud
+    # instead of silently skipping.
+    if not os.environ.get("CC_LIST_ID", "").strip():
+        print("❌ CC_LIST_ID still not set after loading .env — cannot send. "
+              "Check ~/dealmatcher/.env.cheaphomesfla has CC_LIST_ID=...")
+        sys.exit(3)
+
+    # Buyer emails arg optional; for a one-off send we pass [] to skip dedup
     buyer_emails = []
-    print(json.dumps(run(deals, buyer_emails), indent=2, default=str))
+    result = run(deals, buyer_emails)
+    print(json.dumps(result, indent=2, default=str))
+    # Exit non-zero if the send did NOT succeed, so the calling command can
+    # tell the truth instead of printing a false success.
+    sys.exit(0 if result.get("ok") else 4)
